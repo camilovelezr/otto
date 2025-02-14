@@ -1,0 +1,11 @@
+{
+	"folders": [
+		{
+			"path": "../../aithena/services/aithena-services"
+		},
+		{
+			"path": ".."
+		}
+	],
+	"settings": {}
+}
