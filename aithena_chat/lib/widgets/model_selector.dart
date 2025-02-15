@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/llm_model.dart';
@@ -6,25 +7,32 @@ class ModelSelector extends StatefulWidget {
   final List<LLMModel> models;
   final LLMModel selectedModel;
   final Function(LLMModel) onModelSelected;
+  final ScrollController? scrollController;
 
   const ModelSelector({
     Key? key,
     required this.models,
     required this.selectedModel,
     required this.onModelSelected,
+    this.scrollController,
   }) : super(key: key);
 
   @override
   State<ModelSelector> createState() => _ModelSelectorState();
 }
 
-class _ModelSelectorState extends State<ModelSelector> {
+class _ModelSelectorState extends State<ModelSelector> with SingleTickerProviderStateMixin {
   final TextEditingController _controller = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
   final FocusNode _selectorFocusNode = FocusNode();
+  late AnimationController _animationController;
+  late Animation<double> _expandAnimation;
   List<LLMModel> _filteredModels = [];
   int _selectedIndex = -1;
   bool _isExpanded = false;
+  bool _isHovered = false;
+  bool _isVisible = true;
+  double _lastScrollOffset = 0;
   OverlayEntry? _overlayEntry;
 
   @override
@@ -32,6 +40,18 @@ class _ModelSelectorState extends State<ModelSelector> {
     super.initState();
     _filteredModels = _sortModels(widget.models);
     _selectorFocusNode.addListener(_handleSelectorFocus);
+    
+    _animationController = AnimationController(
+      duration: const Duration(milliseconds: 200),
+      vsync: this,
+    );
+    
+    _expandAnimation = CurvedAnimation(
+      parent: _animationController,
+      curve: Curves.easeInOutCubic,
+    );
+
+    widget.scrollController?.addListener(_handleScroll);
   }
 
   @override
@@ -41,7 +61,30 @@ class _ModelSelectorState extends State<ModelSelector> {
     _searchFocusNode.dispose();
     _selectorFocusNode.removeListener(_handleSelectorFocus);
     _selectorFocusNode.dispose();
+    _animationController.dispose();
+    widget.scrollController?.removeListener(_handleScroll);
     super.dispose();
+  }
+
+  void _handleScroll() {
+    if (widget.scrollController == null) return;
+    
+    final currentOffset = widget.scrollController!.offset;
+    final isScrollingDown = currentOffset > _lastScrollOffset;
+    final isAtTop = currentOffset <= 0;
+    
+    setState(() {
+      if (isAtTop) {
+        _isVisible = true;
+      } else if (isScrollingDown) {
+        _isVisible = false;
+      } else {
+        // Scrolling up
+        _isVisible = true;
+      }
+    });
+
+    _lastScrollOffset = currentOffset;
   }
 
   void _handleSelectorFocus() {
@@ -86,14 +129,16 @@ class _ModelSelectorState extends State<ModelSelector> {
   }
 
   void _hideOverlay() {
-    setState(() {
-      _isExpanded = false;
-      _controller.clear();
-      _filteredModels = _sortModels(widget.models);
-      _selectedIndex = -1;
+    _animationController.reverse().then((_) {
+      setState(() {
+        _isExpanded = false;
+        _controller.clear();
+        _filteredModels = _sortModels(widget.models);
+        _selectedIndex = -1;
+      });
+      _overlayEntry?.remove();
+      _overlayEntry = null;
     });
-    _overlayEntry?.remove();
-    _overlayEntry = null;
   }
 
   void _selectModel(LLMModel model) {
@@ -101,105 +146,141 @@ class _ModelSelectorState extends State<ModelSelector> {
     _hideOverlay();
   }
 
+  Color _getPlatformColor(String platform) {
+    switch (platform.toLowerCase()) {
+      case 'openai':
+        return const Color(0xFF10A37F); // OpenAI green
+      case 'anthropic':
+        return const Color(0xFF7B61FF); // Anthropic purple
+      case 'groq':
+        return const Color(0xFF1A73E8); // Groq blue
+      case 'ollama':
+        return const Color(0xFFFF5F1F); // Ollama orange
+      default:
+        return Theme.of(context).colorScheme.primary;
+    }
+  }
+
+  Widget _buildModelIcon(String platform) {
+    IconData iconData = Icons.smart_toy_outlined;
+    switch (platform.toLowerCase()) {
+      case 'openai':
+        iconData = Icons.auto_awesome;
+        break;
+      case 'anthropic':
+        iconData = Icons.psychology;
+        break;
+      case 'groq':
+        iconData = Icons.bolt;
+        break;
+      case 'ollama':
+        iconData = Icons.terminal;
+        break;
+    }
+    final platformColor = _getPlatformColor(platform);
+    return Icon(
+      iconData,
+      size: 18,
+      color: platformColor,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-
-    return Material(
+    final platformColor = _getPlatformColor(widget.selectedModel.platform);
+    
+    Widget content = Material(
       color: Colors.transparent,
-      child: Focus(
-        onKeyEvent: (node, event) {
-          // Only handle key events when not expanded
-          if (!_isExpanded && event is KeyDownEvent) {
-            final character = event.character;
-            if (character != null && character.trim().isNotEmpty) {
-              setState(() {
-                _isExpanded = true;
-                _controller.text = character;
-                _controller.selection = TextSelection.collapsed(offset: character.length);
-                _filterModels(character);
-                _showOverlay(context);
-              });
-              return KeyEventResult.handled;
+      child: GestureDetector(
+        onTap: () {
+          setState(() {
+            _isExpanded = !_isExpanded;
+            if (_isExpanded) {
+              _controller.clear();
+              _filteredModels = _sortModels(widget.models);
+              _selectedIndex = -1;
+              _showOverlay(context);
+              _searchFocusNode.requestFocus();
+            } else {
+              _hideOverlay();
             }
-          }
-          return KeyEventResult.ignored;
+          });
         },
-        child: GestureDetector(
-          onTap: () {
-            setState(() {
-              _isExpanded = !_isExpanded;
-              if (_isExpanded) {
-                _controller.clear();
-                _filteredModels = _sortModels(widget.models);
-                _selectedIndex = -1;
-                _showOverlay(context);
-                // Ensure focus is requested within the widget's context
-                _searchFocusNode.requestFocus();
-              } else {
-                _hideOverlay();
-              }
-            });
-          },
-          child: MouseRegion(
-            cursor: SystemMouseCursors.click,
+        child: MouseRegion(
+          onEnter: (_) => setState(() => _isHovered = true),
+          onExit: (_) => setState(() => _isHovered = false),
+          cursor: SystemMouseCursors.click,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            transform: Matrix4.identity()..scale(_isHovered ? 1.02 : 1.0),
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surface,
-                borderRadius: BorderRadius.circular(12),
+                color: theme.colorScheme.surface.withOpacity(0.7),
+                borderRadius: BorderRadius.circular(24),
                 border: Border.all(
-                  color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+                  color: platformColor.withOpacity(_isHovered ? 0.3 : 0.1),
                 ),
                 boxShadow: [
                   BoxShadow(
-                    color: Theme.of(context).colorScheme.primary.withOpacity(0.05),
-                    blurRadius: 4,
+                    color: platformColor.withOpacity(0.05),
+                    blurRadius: _isHovered ? 8 : 4,
                     offset: const Offset(0, 2),
                   ),
                 ],
               ),
               child: Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(
-                    Icons.smart_toy_outlined,
-                    color: Theme.of(context).colorScheme.primary,
-                    size: 20,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
+                  _buildModelIcon(widget.selectedModel.platform),
+                  const SizedBox(width: 8),
+                  Flexible(
                     child: Row(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        Expanded(
+                        Flexible(
                           child: Text(
                             widget.selectedModel.name,
-                            style: Theme.of(context).textTheme.bodyLarge!.copyWith(
-                              fontWeight: FontWeight.bold,
+                            style: theme.textTheme.bodyMedium!.copyWith(
+                              fontWeight: FontWeight.w500,
+                              color: theme.colorScheme.onSurface,
                             ),
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Text(
-                            widget.selectedModel.platform.toUpperCase(),
-                            style: Theme.of(context).textTheme.bodySmall!.copyWith(
-                              color: Theme.of(context).colorScheme.primary,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
+                        AnimatedSize(
+                          duration: const Duration(milliseconds: 200),
+                          child: _isHovered || _isExpanded
+                              ? Container(
+                                  margin: const EdgeInsets.only(left: 8),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 2,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: platformColor.withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Text(
+                                    widget.selectedModel.platform.toUpperCase(),
+                                    style: theme.textTheme.labelSmall!.copyWith(
+                                      color: platformColor,
+                                      fontWeight: FontWeight.w600,
+                                      letterSpacing: 0.3,
+                                    ),
+                                  ),
+                                )
+                              : const SizedBox.shrink(),
+                        ),
+                        const SizedBox(width: 4),
+                        Icon(
+                          Icons.expand_more_rounded,
+                          color: platformColor.withOpacity(_isHovered ? 1 : 0.5),
+                          size: 20,
                         ),
                       ],
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Icon(
-                    _isExpanded ? Icons.expand_less : Icons.expand_more,
-                    color: Theme.of(context).colorScheme.primary,
-                    size: 20,
                   ),
                 ],
               ),
@@ -208,6 +289,8 @@ class _ModelSelectorState extends State<ModelSelector> {
         ),
       ),
     );
+
+    return content;
   }
 
   void _showOverlay(BuildContext context) {
@@ -228,157 +311,202 @@ class _ModelSelectorState extends State<ModelSelector> {
             ),
           ),
           Positioned(
-            top: offset.dy + size.height + 8,
+            top: offset.dy + size.height + 4,
             left: offset.dx,
-            width: size.width,
-            child: Material(
-              elevation: 8,
-              borderRadius: BorderRadius.circular(12),
-              clipBehavior: Clip.antiAlias,
+            child: AnimatedBuilder(
+              animation: _expandAnimation,
+              builder: (context, child) => Transform.scale(
+                scale: _expandAnimation.value,
+                alignment: Alignment.topCenter,
+                child: child,
+              ),
               child: Container(
-                color: theme.colorScheme.surface,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.all(8),
-                      child: Focus(
-                        onKeyEvent: (node, event) {
-                          if (event is KeyDownEvent) {
-                            if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
-                              setState(() {
-                                _selectedIndex = (_selectedIndex + 1) % _filteredModels.length;
-                                _overlayEntry?.markNeedsBuild();
-                              });
-                              return KeyEventResult.handled;
-                            } else if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
-                              setState(() {
-                                _selectedIndex = _selectedIndex <= 0
-                                    ? _filteredModels.length - 1
-                                    : _selectedIndex - 1;
-                                _overlayEntry?.markNeedsBuild();
-                              });
-                              return KeyEventResult.handled;
-                            } else if (event.logicalKey == LogicalKeyboardKey.enter ||
-                                event.logicalKey == LogicalKeyboardKey.numpadEnter) {
-                              if (_selectedIndex >= 0 &&
-                                  _selectedIndex < _filteredModels.length) {
-                                _selectModel(_filteredModels[_selectedIndex]);
+                width: 280, // Fixed width for better consistency
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height * 0.6,
+                ),
+                child: Material(
+                  elevation: 8,
+                  borderRadius: BorderRadius.circular(16),
+                  clipBehavior: Clip.antiAlias,
+                  color: theme.colorScheme.surface.withOpacity(0.98),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Focus(
+                          onKeyEvent: (node, event) {
+                            if (event is KeyDownEvent) {
+                              if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+                                setState(() {
+                                  _selectedIndex = (_selectedIndex + 1) % _filteredModels.length;
+                                  _overlayEntry?.markNeedsBuild();
+                                });
+                                return KeyEventResult.handled;
+                              } else if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+                                setState(() {
+                                  _selectedIndex = _selectedIndex <= 0
+                                      ? _filteredModels.length - 1
+                                      : _selectedIndex - 1;
+                                  _overlayEntry?.markNeedsBuild();
+                                });
+                                return KeyEventResult.handled;
+                              } else if (event.logicalKey == LogicalKeyboardKey.enter ||
+                                  event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+                                if (_selectedIndex >= 0 &&
+                                    _selectedIndex < _filteredModels.length) {
+                                  _selectModel(_filteredModels[_selectedIndex]);
+                                }
+                                return KeyEventResult.handled;
+                              } else if (event.logicalKey == LogicalKeyboardKey.escape) {
+                                _hideOverlay();
+                                return KeyEventResult.handled;
                               }
-                              return KeyEventResult.handled;
-                            } else if (event.logicalKey == LogicalKeyboardKey.escape) {
-                              _hideOverlay();
-                              return KeyEventResult.handled;
                             }
-                          }
-                          return KeyEventResult.ignored;
-                        },
-                        child: TextField(
-                          controller: _controller,
-                          focusNode: _searchFocusNode,
-                          decoration: InputDecoration(
-                            hintText: 'Search models...',
-                            prefixIcon: Icon(
-                              Icons.search,
-                              color: theme.colorScheme.onSurface.withOpacity(0.5),
+                            return KeyEventResult.ignored;
+                          },
+                          child: TextField(
+                            controller: _controller,
+                            focusNode: _searchFocusNode,
+                            autofocus: true,
+                            style: theme.textTheme.bodyMedium!.copyWith(
+                              fontWeight: FontWeight.w500,
                             ),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                              borderSide: BorderSide(
-                                color: theme.colorScheme.outline.withOpacity(0.1),
+                            decoration: InputDecoration(
+                              isDense: true,
+                              hintText: 'Search models...',
+                              hintStyle: theme.textTheme.bodyMedium!.copyWith(
+                                color: theme.colorScheme.onSurface.withOpacity(0.5),
+                                fontWeight: FontWeight.w500,
+                              ),
+                              prefixIcon: Icon(
+                                Icons.search_rounded,
+                                color: theme.colorScheme.primary,
+                                size: 20,
+                              ),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: BorderSide(
+                                  color: theme.colorScheme.primary.withOpacity(0.2),
+                                ),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: BorderSide(
+                                  color: theme.colorScheme.primary.withOpacity(0.2),
+                                ),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: BorderSide(
+                                  color: theme.colorScheme.primary,
+                                ),
+                              ),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 10,
                               ),
                             ),
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                              borderSide: BorderSide(
-                                color: theme.colorScheme.outline.withOpacity(0.1),
-                              ),
-                            ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                              borderSide: BorderSide(
-                                color: theme.colorScheme.primary.withOpacity(0.5),
-                              ),
-                            ),
+                            onChanged: _filterModels,
                           ),
-                          onChanged: _filterModels,
-                          autofocus: true,
                         ),
                       ),
-                    ),
-                    if (_filteredModels.isNotEmpty)
-                      ConstrainedBox(
-                        constraints: BoxConstraints(
-                          maxHeight: MediaQuery.of(context).size.height * 0.4,
-                        ),
+                      const Divider(height: 1),
+                      Flexible(
                         child: ListView.builder(
-                          padding: const EdgeInsets.only(bottom: 8),
                           shrinkWrap: true,
+                          padding: EdgeInsets.zero,
                           itemCount: _filteredModels.length,
                           itemBuilder: (context, index) {
                             final model = _filteredModels[index];
                             final isSelected = index == _selectedIndex;
-                            final isCurrentModel = model == widget.selectedModel;
-
-                            return InkWell(
-                              onTap: () => _selectModel(model),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                            final platformColor = _getPlatformColor(model.platform);
+                            
+                            return MouseRegion(
+                              cursor: SystemMouseCursors.click,
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 200),
                                 decoration: BoxDecoration(
-                                  color: isSelected ? theme.colorScheme.primary.withOpacity(0.1) : null,
-                                ),
-                                child: Row(
-                                  children: [
-                                    Icon(
-                                      Icons.smart_toy_outlined,
-                                      color: theme.colorScheme.primary,
-                                      size: 18,
+                                  color: isSelected
+                                      ? platformColor.withOpacity(0.1)
+                                      : Colors.transparent,
+                                  border: Border(
+                                    left: BorderSide(
+                                      color: isSelected ? platformColor : Colors.transparent,
+                                      width: 3,
                                     ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
+                                  ),
+                                ),
+                                child: Material(
+                                  color: Colors.transparent,
+                                  child: InkWell(
+                                    onTap: () => _selectModel(model),
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 12,
+                                        vertical: 8,
+                                      ),
                                       child: Row(
                                         children: [
+                                          _buildModelIcon(model.platform),
+                                          const SizedBox(width: 12),
                                           Expanded(
-                                            child: Text(
-                                              model.name,
-                                              style: theme.textTheme.bodyLarge!.copyWith(
-                                                fontWeight: FontWeight.bold,
-                                              ),
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Text(
+                                                  model.name,
+                                                  style: theme.textTheme.bodyMedium!.copyWith(
+                                                    fontWeight: isSelected
+                                                        ? FontWeight.w600
+                                                        : FontWeight.w500,
+                                                    color: theme.colorScheme.onSurface,
+                                                  ),
+                                                ),
+                                                if (model.description?.isNotEmpty ?? false)
+                                                  Text(
+                                                    model.description!,
+                                                    style: theme.textTheme.bodySmall!.copyWith(
+                                                      color: theme.colorScheme.onSurface.withOpacity(0.6),
+                                                    ),
+                                                    maxLines: 1,
+                                                    overflow: TextOverflow.ellipsis,
+                                                  ),
+                                              ],
                                             ),
                                           ),
                                           Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 6,
+                                              vertical: 2,
+                                            ),
                                             decoration: BoxDecoration(
-                                              color: theme.colorScheme.primary.withOpacity(0.1),
-                                              borderRadius: BorderRadius.circular(12),
+                                              color: platformColor.withOpacity(0.1),
+                                              borderRadius: BorderRadius.circular(8),
                                             ),
                                             child: Text(
                                               model.platform.toUpperCase(),
-                                              style: theme.textTheme.bodySmall!.copyWith(
-                                                color: theme.colorScheme.primary,
-                                                fontWeight: FontWeight.bold,
+                                              style: theme.textTheme.labelSmall!.copyWith(
+                                                color: platformColor,
+                                                fontWeight: FontWeight.w600,
+                                                letterSpacing: 0.3,
                                               ),
                                             ),
                                           ),
                                         ],
                                       ),
                                     ),
-                                    if (isCurrentModel) ...[
-                                      const SizedBox(width: 8),
-                                      Icon(
-                                        Icons.check_circle_rounded,
-                                        color: theme.colorScheme.primary,
-                                        size: 18,
-                                      ),
-                                    ],
-                                  ],
+                                  ),
                                 ),
                               ),
                             );
                           },
                         ),
                       ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -388,5 +516,6 @@ class _ModelSelectorState extends State<ModelSelector> {
     );
 
     Overlay.of(context).insert(_overlayEntry!);
+    _animationController.forward();
   }
 } 
