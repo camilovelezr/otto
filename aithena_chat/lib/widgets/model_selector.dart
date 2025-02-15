@@ -134,10 +134,8 @@ class _ModelSelectorState extends State<ModelSelector> {
                 _filteredModels = _sortModels(widget.models);
                 _selectedIndex = -1;
                 _showOverlay(context);
-                // Request focus immediately after tap
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  FocusScope.of(context).requestFocus(_searchFocusNode);
-                });
+                // Ensure focus is requested within the widget's context
+                _searchFocusNode.requestFocus();
               } else {
                 _hideOverlay();
               }
@@ -249,22 +247,24 @@ class _ModelSelectorState extends State<ModelSelector> {
                           if (event is KeyDownEvent) {
                             if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
                               setState(() {
-                                _selectedIndex = (_selectedIndex < _filteredModels.length - 1) 
-                                    ? _selectedIndex + 1 
-                                    : _selectedIndex;
+                                _selectedIndex = (_selectedIndex + 1) % _filteredModels.length;
                                 _overlayEntry?.markNeedsBuild();
                               });
                               return KeyEventResult.handled;
                             } else if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
                               setState(() {
-                                _selectedIndex = (_selectedIndex > 0) 
-                                    ? _selectedIndex - 1 
-                                    : _selectedIndex;
+                                _selectedIndex = _selectedIndex <= 0
+                                    ? _filteredModels.length - 1
+                                    : _selectedIndex - 1;
                                 _overlayEntry?.markNeedsBuild();
                               });
                               return KeyEventResult.handled;
-                            } else if (event.logicalKey == LogicalKeyboardKey.enter && _selectedIndex >= 0) {
-                              _selectModel(_filteredModels[_selectedIndex]);
+                            } else if (event.logicalKey == LogicalKeyboardKey.enter ||
+                                event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+                              if (_selectedIndex >= 0 &&
+                                  _selectedIndex < _filteredModels.length) {
+                                _selectModel(_filteredModels[_selectedIndex]);
+                              }
                               return KeyEventResult.handled;
                             } else if (event.logicalKey == LogicalKeyboardKey.escape) {
                               _hideOverlay();
@@ -273,31 +273,36 @@ class _ModelSelectorState extends State<ModelSelector> {
                           }
                           return KeyEventResult.ignored;
                         },
-                        child: Builder(
-                          builder: (builderContext) {
-                            // Schedule focus request after the widget is built
-                            WidgetsBinding.instance.addPostFrameCallback((_) {
-                              if (_isExpanded) {
-                                FocusScope.of(builderContext).requestFocus(_searchFocusNode);
-                              }
-                            });
-                            
-                            return TextField(
-                              controller: _controller,
-                              focusNode: _searchFocusNode,
-                              autofocus: true,
-                              decoration: InputDecoration(
-                                hintText: 'Search models...',
-                                prefixIcon: const Icon(Icons.search, size: 20),
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                                isDense: true,
+                        child: TextField(
+                          controller: _controller,
+                          focusNode: _searchFocusNode,
+                          decoration: InputDecoration(
+                            hintText: 'Search models...',
+                            prefixIcon: Icon(
+                              Icons.search,
+                              color: theme.colorScheme.onSurface.withOpacity(0.5),
+                            ),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                              borderSide: BorderSide(
+                                color: theme.colorScheme.outline.withOpacity(0.1),
                               ),
-                              onChanged: _filterModels,
-                            );
-                          },
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                              borderSide: BorderSide(
+                                color: theme.colorScheme.outline.withOpacity(0.1),
+                              ),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                              borderSide: BorderSide(
+                                color: theme.colorScheme.primary.withOpacity(0.5),
+                              ),
+                            ),
+                          ),
+                          onChanged: _filterModels,
+                          autofocus: true,
                         ),
                       ),
                     ),

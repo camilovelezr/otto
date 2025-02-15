@@ -1,15 +1,30 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class ThemeProvider extends ChangeNotifier {
-  bool _isDarkMode = true;
+  static const String _themeKey = 'is_dark_mode';
+  late SharedPreferences _prefs;
+  bool _isDarkMode;
+
+  ThemeProvider() : _isDarkMode = true {
+    _loadTheme();
+  }
+
   bool get isDarkMode => _isDarkMode;
 
   static const _primaryGradient = [Color(0xFF7B61FF), Color(0xFF9C8FFF)];
   static const _secondaryGradient = [Color(0xFFFF6B6B), Color(0xFFFF8E8E)];
   static const _accentGradient = [Color(0xFF48DAD0), Color(0xFF76E8E0)];
 
-  void toggleTheme() {
+  Future<void> _loadTheme() async {
+    _prefs = await SharedPreferences.getInstance();
+    _isDarkMode = _prefs.getBool(_themeKey) ?? true;
+    notifyListeners();
+  }
+
+  Future<void> toggleTheme() async {
     _isDarkMode = !_isDarkMode;
+    await _prefs.setBool(_themeKey, _isDarkMode);
     notifyListeners();
   }
 

@@ -7,6 +7,10 @@ import '../models/chat_message.dart';
 import '../theme/theme_provider.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:flutter_highlight/flutter_highlight.dart';
+import 'package:flutter_highlight/themes/atom-one-dark.dart';
+import 'package:flutter_highlight/themes/atom-one-light.dart';
 
 class ChatMessageWidget extends StatefulWidget {
   final ChatMessage message;
@@ -118,121 +122,201 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
     super.dispose();
   }
 
+  Widget _buildCodeBlock(ThemeData theme, String code, String? language) {
+    final isDark = theme.brightness == Brightness.dark;
+    
+    return Container(
+      margin: EdgeInsets.zero,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF282C34) : const Color(0xFFFAFAFA),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Code header
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF21252B) : const Color(0xFFF0F0F0),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  language ?? 'plain text',
+                  style: theme.textTheme.bodySmall!.copyWith(
+                    color: isDark 
+                        ? const Color(0xFF9DA5B4)
+                        : const Color(0xFF383A42),
+                  ),
+                ),
+                MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: GestureDetector(
+                    onTap: () => Clipboard.setData(ClipboardData(text: code)),
+                    child: Icon(
+                      Icons.content_copy,
+                      size: 18,
+                      color: isDark 
+                          ? const Color(0xFF9DA5B4)
+                          : const Color(0xFF383A42),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Code content with syntax highlighting
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            color: isDark ? const Color(0xFF282C34) : const Color(0xFFFAFAFA),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: HighlightView(
+                code.trimRight(),
+                language: language ?? 'plaintext',
+                theme: isDark ? atomOneDarkTheme : atomOneLightTheme,
+                textStyle: GoogleFonts.firaCode(
+                  fontSize: 14,
+                  height: 1.5,
+                ),
+                padding: EdgeInsets.zero,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildMessageContent(ThemeData theme) {
     final content = widget.isStreaming ? widget.streamedContent : widget.message.content;
+    final isDark = theme.brightness == Brightness.dark;
     
-    // For user messages, show as plain text
     if (widget.message.isUser) {
       return SelectableText(
         content,
         style: theme.textTheme.bodyLarge!.copyWith(
-          color: theme.colorScheme.onSurface,
+          color: isDark 
+              ? Colors.white
+              : theme.colorScheme.onSurface,
           height: 1.5,
+          shadows: isDark ? [
+            const Shadow(
+              color: Colors.black26,
+              offset: Offset(0, 1),
+              blurRadius: 2,
+            ),
+          ] : null,
         ),
       );
     }
 
-    // For streaming JSON content, show as plain text
-    if (widget.isStreaming && (content.trim().startsWith('{') || content.trim().startsWith('['))) {
-      return SelectableText(
-        content,
-        style: theme.textTheme.bodyLarge!.copyWith(
-          color: theme.colorScheme.onSurface,
-          height: 1.5,
-        ),
-      );
-    }
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        return Container(
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surface.withOpacity(0.7),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          clipBehavior: Clip.antiAlias,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              MarkdownBody(
-                data: _processedContent.isEmpty ? content : _processedContent,
-                selectable: true,
-                softLineBreak: true,
-                fitContent: true,
-                shrinkWrap: true,
-                onTapLink: (_, href, __) {
-                  debugPrint('Link tapped: $href');
-                },
-                builders: {
-                  'code': CodeElementBuilder(
-                    theme,
-                    context,
-                    maxWidth: constraints.maxWidth,
-                  ),
-                },
-                styleSheet: MarkdownStyleSheet(
-                  p: theme.textTheme.bodyLarge!.copyWith(
-                    color: theme.colorScheme.onSurface,
-                    height: 1.5,
-                  ),
-                  code: theme.textTheme.bodyMedium!.copyWith(
-                    fontFamily: 'monospace',
-                    color: theme.colorScheme.primary,
-                  ),
-                  codeblockPadding: EdgeInsets.zero,
-                  blockquote: theme.textTheme.bodyLarge!.copyWith(
-                    color: theme.colorScheme.onSurface.withOpacity(0.8),
-                    height: 1.5,
-                  ),
-                  blockquoteDecoration: BoxDecoration(
-                    border: Border(
-                      left: BorderSide(
-                        color: theme.colorScheme.primary.withOpacity(0.5),
-                        width: 4,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        MarkdownBody(
+          data: _processedContent.isEmpty ? content : _processedContent,
+          selectable: true,
+          softLineBreak: true,
+          builders: {
+            'code': CodeElementBuilder(
+              theme,
+              context,
+              customBuilder: (String text, String? language, bool isInline) {
+                if (isInline) {
+                  return Text.rich(
+                    TextSpan(
+                      text: text.trim(),
+                      style: GoogleFonts.firaCode(
+                        fontSize: theme.textTheme.bodyMedium!.fontSize,
+                        color: isDark
+                            ? theme.colorScheme.primary.lighten(0.1)
+                            : theme.colorScheme.primary,
+                        backgroundColor: isDark
+                            ? Colors.white.withOpacity(0.15)
+                            : Colors.black.withOpacity(0.05),
+                        height: 1.5,
+                        letterSpacing: 0,
                       ),
                     ),
-                    color: theme.colorScheme.surface,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  blockquotePadding: const EdgeInsets.all(16),
-                  listBullet: theme.textTheme.bodyLarge!.copyWith(
-                    color: theme.colorScheme.onSurface,
-                  ),
-                  textScaleFactor: MediaQuery.textScaleFactorOf(context),
-                  textAlign: WrapAlignment.start,
-                  h1: theme.textTheme.headlineMedium!.copyWith(
-                    color: theme.colorScheme.onSurface,
-                  ),
-                  h2: theme.textTheme.headlineSmall!.copyWith(
-                    color: theme.colorScheme.onSurface,
-                  ),
-                  h3: theme.textTheme.titleLarge!.copyWith(
-                    color: theme.colorScheme.onSurface,
-                  ),
-                  h4: theme.textTheme.titleMedium!.copyWith(
-                    color: theme.colorScheme.onSurface,
-                  ),
-                  h5: theme.textTheme.titleSmall!.copyWith(
-                    color: theme.colorScheme.onSurface,
-                  ),
-                  h6: theme.textTheme.bodyLarge!.copyWith(
-                    color: theme.colorScheme.onSurface,
-                  ),
-                  em: const TextStyle(fontStyle: FontStyle.italic),
-                  strong: const TextStyle(fontWeight: FontWeight.bold),
-                  del: const TextStyle(decoration: TextDecoration.lineThrough),
+                    softWrap: true,
+                  );
+                }
+                return _buildCodeBlock(theme, text, language);
+              },
+            ),
+          },
+          styleSheet: MarkdownStyleSheet(
+            p: theme.textTheme.bodyLarge!.copyWith(
+              color: isDark
+                  ? Colors.white.withOpacity(0.95)
+                  : theme.colorScheme.onSurface,
+              height: 1.5,
+            ),
+            code: theme.textTheme.bodyMedium!.copyWith(
+              fontFamily: GoogleFonts.firaCode().fontFamily,
+              color: theme.colorScheme.primary,
+              height: 1.5,
+              letterSpacing: 0,
+            ),
+            codeblockPadding: EdgeInsets.zero,
+            codeblockDecoration: const BoxDecoration(),
+            blockSpacing: 16,
+            h1Padding: EdgeInsets.zero,
+            h2Padding: EdgeInsets.zero,
+            h3Padding: EdgeInsets.zero,
+            h4Padding: EdgeInsets.zero,
+            h5Padding: EdgeInsets.zero,
+            h6Padding: EdgeInsets.zero,
+            listIndent: 24,
+            blockquote: theme.textTheme.bodyLarge!.copyWith(
+              color: theme.colorScheme.onSurface.withOpacity(0.8),
+              height: 1.5,
+            ),
+            blockquoteDecoration: BoxDecoration(
+              border: Border(
+                left: BorderSide(
+                  color: theme.colorScheme.primary.withOpacity(0.5),
+                  width: 4,
                 ),
-                key: ValueKey('markdown-${widget.message.id}'),
               ),
-              if (widget.isStreaming)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: _buildTypingIndicator(theme),
-                ),
-            ],
+              color: theme.colorScheme.surface,
+              borderRadius: BorderRadius.circular(4),
+            ),
+            blockquotePadding: const EdgeInsets.all(16),
+            listBullet: theme.textTheme.bodyLarge!.copyWith(
+              color: theme.colorScheme.onSurface,
+            ),
+            textScaleFactor: MediaQuery.textScaleFactorOf(context),
+            textAlign: WrapAlignment.start,
+            h1: theme.textTheme.headlineMedium!.copyWith(
+              color: theme.colorScheme.onSurface,
+            ),
+            h2: theme.textTheme.headlineSmall!.copyWith(
+              color: theme.colorScheme.onSurface,
+            ),
+            h3: theme.textTheme.titleLarge!.copyWith(
+              color: theme.colorScheme.onSurface,
+            ),
+            h4: theme.textTheme.titleMedium!.copyWith(
+              color: theme.colorScheme.onSurface,
+            ),
+            h5: theme.textTheme.titleSmall!.copyWith(
+              color: theme.colorScheme.onSurface,
+            ),
+            h6: theme.textTheme.bodyLarge!.copyWith(
+              color: theme.colorScheme.onSurface,
+            ),
+            em: const TextStyle(fontStyle: FontStyle.italic),
+            strong: const TextStyle(fontWeight: FontWeight.bold),
+            del: const TextStyle(decoration: TextDecoration.lineThrough),
           ),
-        );
-      },
+        ),
+        if (widget.isStreaming) _buildTypingIndicator(theme),
+      ],
     );
   }
 
@@ -241,6 +325,7 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
     final theme = Theme.of(context);
     final themeProvider = context.watch<ThemeProvider>();
     final isUser = widget.message.isUser;
+    final isDark = theme.brightness == Brightness.dark;
 
     return AnimatedBuilder(
       animation: _animationController,
@@ -254,63 +339,86 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
                 horizontal: 16,
                 vertical: 8,
               ),
-              child: Row(
-                mainAxisAlignment:
-                    isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
-                crossAxisAlignment: CrossAxisAlignment.start,
+              child: Column(
+                crossAxisAlignment: isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                 children: [
-                  if (!isUser) _buildAvatar(theme),
-                  const SizedBox(width: 12),
-                  Flexible(
-                    child: Container(
-                      constraints: BoxConstraints(
-                        maxWidth: MediaQuery.of(context).size.width * 0.75,
-                      ),
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: isUser
-                              ? [
-                                  theme.colorScheme.primary.withOpacity(0.1),
-                                  theme.colorScheme.secondary.withOpacity(0.1),
-                                ]
-                              : [
-                                  theme.colorScheme.surface,
-                                  theme.colorScheme.surface,
-                                ],
-                        ),
-                        borderRadius: BorderRadius.only(
-                          topLeft: const Radius.circular(20),
-                          topRight: const Radius.circular(20),
-                          bottomLeft: Radius.circular(isUser ? 20 : 4),
-                          bottomRight: Radius.circular(isUser ? 4 : 20),
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: theme.colorScheme.primary.withOpacity(0.05),
-                            blurRadius: 10,
-                            offset: const Offset(0, 2),
+                  Row(
+                    mainAxisAlignment:
+                        isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (!isUser) _buildAvatar(theme),
+                      const SizedBox(width: 12),
+                      Flexible(
+                        child: Container(
+                          constraints: BoxConstraints(
+                            maxWidth: MediaQuery.of(context).size.width * 0.75,
                           ),
-                        ],
-                      ),
-                      child: Stack(
-                        children: [
-                          Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                _buildMessageContent(theme),
-                              ],
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: isUser
+                                  ? [
+                                      (isDark
+                                          ? theme.colorScheme.primary.withOpacity(0.25)
+                                          : theme.colorScheme.primary.withOpacity(0.1)),
+                                      (isDark
+                                          ? theme.colorScheme.secondary.withOpacity(0.2)
+                                          : theme.colorScheme.secondary.withOpacity(0.1)),
+                                    ]
+                                  : [
+                                      (isDark
+                                          ? theme.colorScheme.surface.darken(0.1)
+                                          : theme.colorScheme.surface),
+                                      (isDark
+                                          ? theme.colorScheme.surface.darken(0.05).withOpacity(0.9)
+                                          : theme.colorScheme.surface.withOpacity(0.9)),
+                                    ],
                             ),
+                            borderRadius: BorderRadius.only(
+                              topLeft: const Radius.circular(20),
+                              topRight: const Radius.circular(20),
+                              bottomLeft: Radius.circular(isUser ? 20 : 4),
+                              bottomRight: Radius.circular(isUser ? 4 : 20),
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: isDark
+                                    ? theme.shadowColor.withOpacity(0.2)
+                                    : theme.shadowColor.withOpacity(0.1),
+                                blurRadius: 8,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
                           ),
-                        ],
+                          padding: const EdgeInsets.all(16),
+                          child: _buildMessageContent(theme),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      if (isUser) _buildAvatar(theme),
+                    ],
+                  ),
+                  if (!isUser && !widget.isStreaming)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 48, top: 4),
+                      child: IconButton(
+                        icon: const Icon(Icons.copy_all, size: 20),
+                        onPressed: () => Clipboard.setData(
+                          ClipboardData(text: widget.message.content),
+                        ),
+                        tooltip: 'Copy message',
+                        style: IconButton.styleFrom(
+                          backgroundColor: isDark
+                              ? theme.colorScheme.surface.darken(0.1).withOpacity(0.8)
+                              : theme.colorScheme.surface.withOpacity(0.8),
+                          foregroundColor: theme.colorScheme.onSurface,
+                          padding: const EdgeInsets.all(8),
+                          minimumSize: const Size(32, 32),
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  if (isUser) _buildAvatar(theme),
                 ],
               ),
             ),
@@ -389,15 +497,21 @@ String _processContent(String content) {
       insideCodeBlock = !insideCodeBlock;
       processedLines.add(line);
     } else if (insideCodeBlock) {
-      // Inside code block - preserve content exactly as is
-      processedLines.add(line);
+      processedLines.add(line.trimRight());
     } else {
-      // Regular text - preserve as is
-      processedLines.add(line);
+      // For non-code-block lines, ensure proper spacing around inline code
+      processedLines.add(line.replaceAllMapped(
+        RegExp(r'(\s*)`([^`]+)`(\s*)'),
+        (match) {
+          final beforeSpace = match[1] ?? '';
+          final code = match[2] ?? '';
+          final afterSpace = match[3] ?? '';
+          return '${beforeSpace.isEmpty ? '' : ' '}`${code.trim()}`${afterSpace.isEmpty ? ' ' : afterSpace}';
+        }
+      ));
     }
   }
 
-  // Ensure code blocks are properly closed
   if (insideCodeBlock) {
     processedLines.add('```');
   }
@@ -408,161 +522,64 @@ String _processContent(String content) {
 class CodeElementBuilder extends MarkdownElementBuilder {
   final ThemeData theme;
   final BuildContext context;
-  final double maxWidth;
+  final Function(String, String?, bool)? customBuilder;
 
-  CodeElementBuilder(this.theme, this.context, {required this.maxWidth});
+  CodeElementBuilder(this.theme, this.context, {this.customBuilder});
 
   @override
   Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) {
-    if (element.tag != 'code' && element.tag != 'pre') return null;
-
-    try {
-      if (element.tag == 'pre') {
-        // Get the code element (should be the first child of pre)
-        final children = element.children;
-        if (children == null || children.isEmpty) {
-          debugPrint('Pre element has no children');
-          return const SizedBox.shrink();
-        }
-
-        // Find the code element
-        md.Element? codeElement;
-        for (final child in children) {
-          if (child is md.Element && child.tag == 'code') {
-            codeElement = child;
-            break;
-          }
-        }
-
-        // Extract language and content
-        String language = '';
-        String codeContent = '';
-
-        if (codeElement != null) {
-          // Get language from class attribute
-          final classAttr = codeElement.attributes?['class'] as String?;
-          if (classAttr != null && classAttr.startsWith('language-')) {
-            language = classAttr.substring(9);
-          }
-
-          // Get content safely
-          codeContent = codeElement.textContent ?? '';
-        } else {
-          // Fallback to getting content from pre element
-          codeContent = children.map((child) => child.textContent ?? '').join('\n');
-        }
-
-        codeContent = codeContent.trim();
-        if (codeContent.isEmpty) {
-          debugPrint('Empty code block content');
-          return const SizedBox.shrink();
-        }
-
-        return Container(
-          margin: const EdgeInsets.symmetric(vertical: 8),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceVariant,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: theme.colorScheme.primary.withOpacity(0.1),
-            ),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (language.isNotEmpty)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.primary.withOpacity(0.1),
-                    borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(8),
-                      topRight: Radius.circular(8),
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        language.toUpperCase(),
-                        style: TextStyle(
-                          color: theme.colorScheme.primary,
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      IconButton(
-                        icon: Icon(
-                          Icons.copy_rounded,
-                          size: 16,
-                          color: theme.colorScheme.primary,
-                        ),
-                        constraints: const BoxConstraints(
-                          minWidth: 32,
-                          minHeight: 32,
-                        ),
-                        padding: EdgeInsets.zero,
-                        onPressed: () {
-                          Clipboard.setData(ClipboardData(text: codeContent));
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Code copied to clipboard'),
-                              behavior: SnackBarBehavior.floating,
-                              duration: Duration(seconds: 2),
-                            ),
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Container(
-                  padding: const EdgeInsets.all(16),
-                  constraints: BoxConstraints(
-                    minWidth: maxWidth * 0.6,
-                  ),
-                  child: SelectableText(
-                    codeContent,
-                    style: TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 14,
-                      height: 1.5,
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        );
-      } else if (element.tag == 'code') {
-        // Handle inline code
-        final textContent = element.textContent?.trim();
-        if (textContent == null || textContent.isEmpty) {
-          return const SizedBox.shrink();
-        }
-
-        return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.primary.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(4),
-          ),
-          child: Text(
-            textContent,
-            style: preferredStyle?.copyWith(
-              fontFamily: 'monospace',
-              color: theme.colorScheme.primary,
-            ),
-          ),
-        );
-      }
-    } catch (e, stackTrace) {
-      debugPrint('Error in CodeElementBuilder: $e');
-      debugPrint('Stack trace: $stackTrace');
+    var language = '';
+    if (element.attributes['class'] != null) {
+      String lg = element.attributes['class'] as String;
+      language = lg.substring(9);
     }
-    return null;
+
+    final isInline = element.tag == 'code' && !element.attributes.containsKey('class');
+
+    if (customBuilder != null) {
+      return customBuilder!(element.textContent.trim(), language, isInline);
+    }
+
+    if (isInline) {
+      return Text.rich(
+        TextSpan(
+          text: element.textContent.trim(),
+          style: GoogleFonts.firaCode(
+            fontSize: theme.textTheme.bodyMedium!.fontSize,
+            color: theme.colorScheme.primary,
+            backgroundColor: theme.colorScheme.surface.withOpacity(0.7),
+            height: 1.5,
+            letterSpacing: 0,
+          ),
+        ),
+        softWrap: true,
+      );
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface.withOpacity(0.7),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      padding: const EdgeInsets.all(16),
+      child: SelectableText(
+        element.textContent.trim(),
+        style: preferredStyle,
+      ),
+    );
+  }
+}
+
+extension ColorExtension on Color {
+  Color darken([double amount = 0.1]) {
+    assert(amount >= 0 && amount <= 1);
+    final hsl = HSLColor.fromColor(this);
+    return hsl.withLightness((hsl.lightness - amount).clamp(0.0, 1.0)).toColor();
+  }
+
+  Color lighten([double amount = 0.1]) {
+    assert(amount >= 0 && amount <= 1);
+    final hsl = HSLColor.fromColor(this);
+    return hsl.withLightness((hsl.lightness + amount).clamp(0.0, 1.0)).toColor();
   }
 } 
