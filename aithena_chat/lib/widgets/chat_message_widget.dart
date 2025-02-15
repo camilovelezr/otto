@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
-import 'package:google_fonts/google_fonts.dart';
-import 'package:flutter/rendering.dart';
-import 'dart:ui';  // Add this import for ImageFilter
+import 'package:markdown/markdown.dart' as md;
+import 'package:flutter/foundation.dart';
 import '../models/chat_message.dart';
+import '../theme/theme_provider.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 
 class ChatMessageWidget extends StatefulWidget {
   final ChatMessage message;
@@ -22,344 +24,545 @@ class ChatMessageWidget extends StatefulWidget {
   State<ChatMessageWidget> createState() => _ChatMessageWidgetState();
 }
 
-class _ChatMessageWidgetState extends State<ChatMessageWidget> with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _fadeAnimation;
-  bool _isHovered = false;
+class _ChatMessageWidgetState extends State<ChatMessageWidget>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _animationController;
+  late Animation<double> _scaleAnimation;
+  late Animation<double> _opacityAnimation;
+  String _processedContent = '';
+  bool _isProcessing = false;
 
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(
-      duration: const Duration(milliseconds: 400),
+    _animationController = AnimationController(
       vsync: this,
+      duration: const Duration(milliseconds: 300),
     );
-    _fadeAnimation = CurvedAnimation(
-      parent: _controller,
-      curve: Curves.easeOut,
+
+    _scaleAnimation = Tween<double>(begin: 0.95, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _animationController,
+        curve: Curves.easeOutCubic,
+      ),
     );
-    _controller.forward();
+
+    _opacityAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _animationController,
+        curve: Curves.easeOutCubic,
+      ),
+    );
+
+    _animationController.forward();
+    _updateProcessedContent();
+  }
+
+  @override
+  void didUpdateWidget(ChatMessageWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.streamedContent != widget.streamedContent ||
+        oldWidget.message.content != widget.message.content) {
+      _updateProcessedContent();
+    }
+  }
+
+  Future<void> _updateProcessedContent() async {
+    if (_isProcessing) return;
+    _isProcessing = true;
+
+    try {
+      final content = widget.isStreaming ? widget.streamedContent : widget.message.content;
+      
+      if (content.isEmpty) {
+        setState(() {
+          _processedContent = '';
+          _isProcessing = false;
+        });
+        return;
+      }
+
+      // Skip processing for streaming content that contains JSON chunks
+      if (widget.isStreaming && (content.trim().startsWith('{') || content.trim().startsWith('['))) {
+        setState(() {
+          _processedContent = content;
+          _isProcessing = false;
+        });
+        return;
+      }
+
+      // Process content in a separate isolate to avoid UI blocking
+      final processed = await compute<String, String>(_processContent, content);
+      
+      if (mounted) {
+        setState(() {
+          _processedContent = processed;
+          _isProcessing = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error processing content: $e');
+      // Fallback to raw content if processing fails
+      if (mounted) {
+        setState(() {
+          _processedContent = widget.isStreaming ? widget.streamedContent : widget.message.content;
+          _isProcessing = false;
+        });
+      }
+    }
   }
 
   @override
   void dispose() {
-    _controller.dispose();
+    _animationController.dispose();
     super.dispose();
   }
 
-  void _copyToClipboard(BuildContext context, String text) {
-    Clipboard.setData(ClipboardData(text: text));
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1F2937),
-            borderRadius: BorderRadius.circular(12),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.1),
-                offset: const Offset(0, 4),
-                blurRadius: 12,
-              ),
-            ],
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.check_circle_outline, 
-                size: 18, 
-                color: Colors.white
-              ),
-              const SizedBox(width: 12),
-              Text(
-                'Copied to clipboard',
-                style: GoogleFonts.inter(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: Colors.white,
-                  letterSpacing: -0.1,
-                ),
-              ),
-            ],
-          ),
+  Widget _buildMessageContent(ThemeData theme) {
+    final content = widget.isStreaming ? widget.streamedContent : widget.message.content;
+    
+    // For user messages, show as plain text
+    if (widget.message.isUser) {
+      return SelectableText(
+        content,
+        style: theme.textTheme.bodyLarge!.copyWith(
+          color: theme.colorScheme.onSurface,
+          height: 1.5,
         ),
-        behavior: SnackBarBehavior.floating,
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        duration: const Duration(seconds: 2),
-        width: 240,
-        padding: EdgeInsets.zero,
-      ),
+      );
+    }
+
+    // For streaming JSON content, show as plain text
+    if (widget.isStreaming && (content.trim().startsWith('{') || content.trim().startsWith('['))) {
+      return SelectableText(
+        content,
+        style: theme.textTheme.bodyLarge!.copyWith(
+          color: theme.colorScheme.onSurface,
+          height: 1.5,
+        ),
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return Container(
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surface.withOpacity(0.7),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              MarkdownBody(
+                data: _processedContent.isEmpty ? content : _processedContent,
+                selectable: true,
+                softLineBreak: true,
+                fitContent: true,
+                shrinkWrap: true,
+                onTapLink: (_, href, __) {
+                  debugPrint('Link tapped: $href');
+                },
+                builders: {
+                  'code': CodeElementBuilder(
+                    theme,
+                    context,
+                    maxWidth: constraints.maxWidth,
+                  ),
+                },
+                styleSheet: MarkdownStyleSheet(
+                  p: theme.textTheme.bodyLarge!.copyWith(
+                    color: theme.colorScheme.onSurface,
+                    height: 1.5,
+                  ),
+                  code: theme.textTheme.bodyMedium!.copyWith(
+                    fontFamily: 'monospace',
+                    color: theme.colorScheme.primary,
+                  ),
+                  codeblockPadding: EdgeInsets.zero,
+                  blockquote: theme.textTheme.bodyLarge!.copyWith(
+                    color: theme.colorScheme.onSurface.withOpacity(0.8),
+                    height: 1.5,
+                  ),
+                  blockquoteDecoration: BoxDecoration(
+                    border: Border(
+                      left: BorderSide(
+                        color: theme.colorScheme.primary.withOpacity(0.5),
+                        width: 4,
+                      ),
+                    ),
+                    color: theme.colorScheme.surface,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  blockquotePadding: const EdgeInsets.all(16),
+                  listBullet: theme.textTheme.bodyLarge!.copyWith(
+                    color: theme.colorScheme.onSurface,
+                  ),
+                  textScaleFactor: MediaQuery.textScaleFactorOf(context),
+                  textAlign: WrapAlignment.start,
+                  h1: theme.textTheme.headlineMedium!.copyWith(
+                    color: theme.colorScheme.onSurface,
+                  ),
+                  h2: theme.textTheme.headlineSmall!.copyWith(
+                    color: theme.colorScheme.onSurface,
+                  ),
+                  h3: theme.textTheme.titleLarge!.copyWith(
+                    color: theme.colorScheme.onSurface,
+                  ),
+                  h4: theme.textTheme.titleMedium!.copyWith(
+                    color: theme.colorScheme.onSurface,
+                  ),
+                  h5: theme.textTheme.titleSmall!.copyWith(
+                    color: theme.colorScheme.onSurface,
+                  ),
+                  h6: theme.textTheme.bodyLarge!.copyWith(
+                    color: theme.colorScheme.onSurface,
+                  ),
+                  em: const TextStyle(fontStyle: FontStyle.italic),
+                  strong: const TextStyle(fontWeight: FontWeight.bold),
+                  del: const TextStyle(decoration: TextDecoration.lineThrough),
+                ),
+                key: ValueKey('markdown-${widget.message.id}'),
+              ),
+              if (widget.isStreaming)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: _buildTypingIndicator(theme),
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final isUser = widget.message.role == 'user';
-    final displayContent = widget.isStreaming ? widget.streamedContent : widget.message.content;
     final theme = Theme.of(context);
-    final isDarkMode = theme.brightness == Brightness.dark;
+    final themeProvider = context.watch<ThemeProvider>();
+    final isUser = widget.message.isUser;
 
-    return FadeTransition(
-      opacity: _fadeAnimation,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 8.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                Container(
-                  width: 32,
-                  height: 32,
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: isUser
-                          ? [
-                              const Color(0xFF7B61FF).withOpacity(0.1),
-                              const Color(0xFF48DAD0).withOpacity(0.1),
-                            ]
-                          : [
-                              const Color(0xFF7B61FF).withOpacity(0.2),
-                              const Color(0xFFFF6B6B).withOpacity(0.2),
-                            ],
-                    ),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: isUser
-                          ? const Color(0xFF7B61FF).withOpacity(0.1)
-                          : const Color(0xFFFF6B6B).withOpacity(0.1),
-                      width: 1,
-                    ),
-                  ),
-                  child: Icon(
-                    isUser ? Icons.person_outline : Icons.auto_awesome,
-                    size: 16,
-                    color: isUser 
-                        ? const Color(0xFF7B61FF)
-                        : const Color(0xFFFF6B6B),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  isUser ? 'You' : 'Aithena',
-                  style: GoogleFonts.inter(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: isUser 
-                        ? const Color(0xFF7B61FF)
-                        : const Color(0xFFFF6B6B),
-                    letterSpacing: -0.1,
-                  ),
-                ),
-                if (widget.isStreaming) ...[
+    return AnimatedBuilder(
+      animation: _animationController,
+      builder: (context, child) {
+        return Transform.scale(
+          scale: _scaleAnimation.value,
+          child: Opacity(
+            opacity: _opacityAnimation.value,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 8,
+              ),
+              child: Row(
+                mainAxisAlignment:
+                    isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (!isUser) _buildAvatar(theme),
                   const SizedBox(width: 12),
-                  _buildTypingIndicator(theme),
-                ],
-                const Spacer(),
-                if (!isUser && displayContent.isNotEmpty)
-                  MouseRegion(
-                    cursor: SystemMouseCursors.click,
-                    onEnter: (_) => setState(() => _isHovered = true),
-                    onExit: (_) => setState(() => _isHovered = false),
-                    child: AnimatedOpacity(
-                      duration: const Duration(milliseconds: 200),
-                      opacity: _isHovered ? 1.0 : 0.0,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: isDarkMode
-                              ? const Color(0xFF252A48)
-                              : const Color(0xFFF8F9FF),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                            color: const Color(0xFF7B61FF).withOpacity(0.2),
-                            width: 1,
-                          ),
-                        ),
-                        child: IconButton(
-                          icon: const Icon(Icons.copy_outlined, size: 16),
-                          onPressed: () => _copyToClipboard(context, displayContent),
-                          tooltip: 'Copy message',
-                          style: IconButton.styleFrom(
-                            padding: const EdgeInsets.all(8),
-                          ),
-                          color: const Color(0xFF7B61FF),
-                        ),
+                  Flexible(
+                    child: Container(
+                      constraints: BoxConstraints(
+                        maxWidth: MediaQuery.of(context).size.width * 0.75,
                       ),
-                    ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            MouseRegion(
-              onEnter: (_) => setState(() => _isHovered = true),
-              onExit: (_) => setState(() => _isHovered = false),
-              child: Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: isUser
-                        ? [
-                            const Color(0xFF7B61FF).withOpacity(0.05),
-                            const Color(0xFF48DAD0).withOpacity(0.05),
-                          ]
-                        : [
-                            const Color(0xFF7B61FF).withOpacity(0.1),
-                            const Color(0xFFFF6B6B).withOpacity(0.1),
-                          ],
-                  ),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: isUser
-                        ? const Color(0xFF7B61FF).withOpacity(0.1)
-                        : const Color(0xFFFF6B6B).withOpacity(0.1),
-                    width: 1,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: isUser
-                          ? const Color(0xFF7B61FF).withOpacity(0.05)
-                          : const Color(0xFFFF6B6B).withOpacity(0.05),
-                      offset: const Offset(0, 4),
-                      blurRadius: 20,
-                    ),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.all(20),
-                      child: SelectableText(
-                        displayContent,
-                        style: GoogleFonts.inter(
-                          fontSize: 15,
-                          height: 1.5,
-                          letterSpacing: -0.1,
-                          color: isDarkMode
-                              ? Colors.white.withOpacity(0.9)
-                              : const Color(0xFF1A1A2E),
-                          fontWeight: FontWeight.w400,
-                          backgroundColor: Colors.transparent,
-                        ),
-                        textAlign: TextAlign.left,
-                        showCursor: true,
-                        cursorWidth: 2,
-                        cursorRadius: const Radius.circular(2),
-                        cursorColor: const Color(0xFF7B61FF),
-                      ),
-                    ),
-                    if (!isUser && displayContent.isNotEmpty)
-                      Container(
-                        decoration: BoxDecoration(
-                          border: Border(
-                            top: BorderSide(
-                              color: isDarkMode
-                                  ? Colors.white.withOpacity(0.1)
-                                  : const Color(0xFF7B61FF).withOpacity(0.1),
-                              width: 1,
-                            ),
-                          ),
-                        ),
-                        child: Material(
-                          color: Colors.transparent,
-                          child: InkWell(
-                            onTap: () => _copyToClipboard(context, displayContent),
-                            borderRadius: const BorderRadius.only(
-                              bottomLeft: Radius.circular(16),
-                              bottomRight: Radius.circular(16),
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    Icons.copy_outlined,
-                                    size: 16,
-                                    color: const Color(0xFF6B7280),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    'Copy message',
-                                    style: GoogleFonts.inter(
-                                      fontSize: 13,
-                                      color: const Color(0xFF6B7280),
-                                      fontWeight: FontWeight.w500,
-                                      letterSpacing: -0.1,
-                                    ),
-                                  ),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: isUser
+                              ? [
+                                  theme.colorScheme.primary.withOpacity(0.1),
+                                  theme.colorScheme.secondary.withOpacity(0.1),
+                                ]
+                              : [
+                                  theme.colorScheme.surface,
+                                  theme.colorScheme.surface,
                                 ],
-                              ),
+                        ),
+                        borderRadius: BorderRadius.only(
+                          topLeft: const Radius.circular(20),
+                          topRight: const Radius.circular(20),
+                          bottomLeft: Radius.circular(isUser ? 20 : 4),
+                          bottomRight: Radius.circular(isUser ? 4 : 20),
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: theme.colorScheme.primary.withOpacity(0.05),
+                            blurRadius: 10,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Stack(
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                _buildMessageContent(theme),
+                              ],
                             ),
                           ),
-                        ),
+                        ],
                       ),
-                  ],
-                ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  if (isUser) _buildAvatar(theme),
+                ],
               ),
             ),
-          ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildAvatar(ThemeData theme) {
+    return Container(
+      width: 36,
+      height: 36,
+      decoration: BoxDecoration(
+        gradient: widget.message.isUser
+            ? context.read<ThemeProvider>().primaryGradient
+            : context.read<ThemeProvider>().secondaryGradient,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: theme.colorScheme.primary.withOpacity(0.2),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Center(
+        child: Icon(
+          widget.message.isUser
+              ? Icons.person_rounded
+              : Icons.smart_toy_rounded,
+          color: Colors.white,
+          size: 20,
         ),
       ),
     );
   }
 
   Widget _buildTypingIndicator(ThemeData theme) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            const Color(0xFF3B82F6).withOpacity(0.1),
-            const Color(0xFF6366F1).withOpacity(0.1),
-          ],
-        ),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: List.generate(3, (index) {
-          return Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 2),
-            child: _buildDot(theme, index),
-          );
-        }),
-      ),
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: List.generate(3, (index) {
+        return Container(
+          width: 8,
+          height: 8,
+          margin: const EdgeInsets.symmetric(horizontal: 2),
+          decoration: BoxDecoration(
+            gradient: context.read<ThemeProvider>().primaryGradient,
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0.0, end: 1.0),
+            duration: Duration(milliseconds: 600 + (index * 200)),
+            curve: Curves.easeInOut,
+            builder: (context, value, child) {
+              return Transform.scale(
+                scale: 0.5 + (value * 0.5),
+                child: Container(),
+              );
+            },
+          ),
+        );
+      }),
     );
   }
+}
 
-  Widget _buildDot(ThemeData theme, int index) {
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0.0, end: 1.0),
-      duration: const Duration(milliseconds: 800),
-      curve: Curves.easeInOut,
-      builder: (context, value, child) {
-        return Transform.translate(
-          offset: Offset(0, -3 * value * (1 - value) * 8),
-          child: Container(
-            width: 4,
-            height: 4,
-            decoration: BoxDecoration(
-              color: const Color(0xFF3B82F6).withOpacity(0.6),
-              borderRadius: BorderRadius.circular(2),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFF3B82F6).withOpacity(0.2),
-                  blurRadius: 4,
-                  offset: const Offset(0, 2),
+// Isolate-compatible content processor
+String _processContent(String content) {
+  final lines = content.split('\n');
+  final processedLines = <String>[];
+  bool insideCodeBlock = false;
+
+  for (var line in lines) {
+    if (line.startsWith('```')) {
+      insideCodeBlock = !insideCodeBlock;
+      processedLines.add(line);
+    } else if (insideCodeBlock) {
+      // Inside code block - preserve content exactly as is
+      processedLines.add(line);
+    } else {
+      // Regular text - preserve as is
+      processedLines.add(line);
+    }
+  }
+
+  // Ensure code blocks are properly closed
+  if (insideCodeBlock) {
+    processedLines.add('```');
+  }
+
+  return processedLines.join('\n');
+}
+
+class CodeElementBuilder extends MarkdownElementBuilder {
+  final ThemeData theme;
+  final BuildContext context;
+  final double maxWidth;
+
+  CodeElementBuilder(this.theme, this.context, {required this.maxWidth});
+
+  @override
+  Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) {
+    if (element.tag != 'code' && element.tag != 'pre') return null;
+
+    try {
+      if (element.tag == 'pre') {
+        // Get the code element (should be the first child of pre)
+        final children = element.children;
+        if (children == null || children.isEmpty) {
+          debugPrint('Pre element has no children');
+          return const SizedBox.shrink();
+        }
+
+        // Find the code element
+        md.Element? codeElement;
+        for (final child in children) {
+          if (child is md.Element && child.tag == 'code') {
+            codeElement = child;
+            break;
+          }
+        }
+
+        // Extract language and content
+        String language = '';
+        String codeContent = '';
+
+        if (codeElement != null) {
+          // Get language from class attribute
+          final classAttr = codeElement.attributes?['class'] as String?;
+          if (classAttr != null && classAttr.startsWith('language-')) {
+            language = classAttr.substring(9);
+          }
+
+          // Get content safely
+          codeContent = codeElement.textContent ?? '';
+        } else {
+          // Fallback to getting content from pre element
+          codeContent = children.map((child) => child.textContent ?? '').join('\n');
+        }
+
+        codeContent = codeContent.trim();
+        if (codeContent.isEmpty) {
+          debugPrint('Empty code block content');
+          return const SizedBox.shrink();
+        }
+
+        return Container(
+          margin: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceVariant,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: theme.colorScheme.primary.withOpacity(0.1),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (language.isNotEmpty)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.primary.withOpacity(0.1),
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(8),
+                      topRight: Radius.circular(8),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        language.toUpperCase(),
+                        style: TextStyle(
+                          color: theme.colorScheme.primary,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      IconButton(
+                        icon: Icon(
+                          Icons.copy_rounded,
+                          size: 16,
+                          color: theme.colorScheme.primary,
+                        ),
+                        constraints: const BoxConstraints(
+                          minWidth: 32,
+                          minHeight: 32,
+                        ),
+                        padding: EdgeInsets.zero,
+                        onPressed: () {
+                          Clipboard.setData(ClipboardData(text: codeContent));
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Code copied to clipboard'),
+                              behavior: SnackBarBehavior.floating,
+                              duration: Duration(seconds: 2),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
                 ),
-              ],
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  constraints: BoxConstraints(
+                    minWidth: maxWidth * 0.6,
+                  ),
+                  child: SelectableText(
+                    codeContent,
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 14,
+                      height: 1.5,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      } else if (element.tag == 'code') {
+        // Handle inline code
+        final textContent = element.textContent?.trim();
+        if (textContent == null || textContent.isEmpty) {
+          return const SizedBox.shrink();
+        }
+
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.primary.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Text(
+            textContent,
+            style: preferredStyle?.copyWith(
+              fontFamily: 'monospace',
+              color: theme.colorScheme.primary,
             ),
           ),
         );
-      },
-    );
+      }
+    } catch (e, stackTrace) {
+      debugPrint('Error in CodeElementBuilder: $e');
+      debugPrint('Stack trace: $stackTrace');
+    }
+    return null;
   }
 } 

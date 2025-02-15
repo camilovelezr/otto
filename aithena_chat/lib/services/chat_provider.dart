@@ -6,42 +6,66 @@ import '../models/llm_model.dart';
 import 'chat_service.dart';
 
 class ChatProvider with ChangeNotifier {
-  final ChatService _chatService = ChatService();
+  final ChatService _chatService;
   List<ChatMessage> _messages = [];
   List<LLMModel> _availableModels = [];
   LLMModel? _selectedModel;
   bool _isLoading = false;
-  String _error = '';
+  String? _error;
   String _currentStreamedResponse = '';
   static const String _selectedModelKey = 'selected_model';
   static const String _selectedModelPlatformKey = 'selected_model_platform';
+
+  ChatProvider({ChatService? chatService}) : _chatService = chatService ?? ChatService();
 
   List<ChatMessage> get messages => _messages;
   List<LLMModel> get availableModels => _availableModels;
   LLMModel? get selectedModel => _selectedModel;
   bool get isLoading => _isLoading;
-  String get error => _error;
+  String? get error => _error;
   String get currentStreamedResponse => _currentStreamedResponse;
+
+  void clearError() {
+    _error = null;
+    notifyListeners();
+  }
 
   Future<void> loadModels() async {
     try {
       _isLoading = true;
+      _error = null;
       notifyListeners();
-      _error = '';
 
-      // Load models from different endpoints
-      final ollamaModels = await _chatService.getOllamaModels();
-      final openaiModels = await _chatService.getOpenAIModels();
-      final groqModels = await _chatService.getGroqModels();
+      // Load models from different endpoints in parallel
+      final results = await Future.wait([
+        _chatService.getOllamaModels().catchError((e) {
+          debugPrint('Ollama models error: $e');
+          return <String>[];
+        }),
+        _chatService.getOpenAIModels().catchError((e) {
+          debugPrint('OpenAI models error: $e');
+          return <String>[];
+        }),
+        _chatService.getGroqModels().catchError((e) {
+          debugPrint('Groq models error: $e');
+          return <String>[];
+        }),
+      ]);
+
+      final ollamaModels = results[0];
+      final openaiModels = results[1];
+      final groqModels = results[2];
 
       // Create LLMModel instances with correct platform
-      final models = [
+      _availableModels = [
         ...ollamaModels.map((name) => LLMModel.fromName(name, platform: 'ollama')),
         ...openaiModels.map((name) => LLMModel.fromName(name, platform: 'openai')),
         ...groqModels.map((name) => LLMModel.fromName(name, platform: 'groq')),
       ];
 
-      _availableModels = models;
+      if (_availableModels.isEmpty) {
+        throw Exception('No models available. Please check your backend connection.');
+      }
       
       // Load previously selected model from SharedPreferences
       final prefs = await SharedPreferences.getInstance();
@@ -59,6 +83,7 @@ class ChatProvider with ChangeNotifier {
       }
     } catch (e) {
       _error = e.toString();
+      debugPrint('Error loading models: $e');
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -66,31 +91,54 @@ class ChatProvider with ChangeNotifier {
   }
 
   Future<void> selectModel(LLMModel model) async {
-    _selectedModel = model;
-    // Save selected model to SharedPreferences
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_selectedModelKey, model.name);
-    await prefs.setString(_selectedModelPlatformKey, model.platform);
-    notifyListeners();
+    try {
+      _selectedModel = model;
+      // Save selected model to SharedPreferences
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_selectedModelKey, model.name);
+      await prefs.setString(_selectedModelPlatformKey, model.platform);
+      notifyListeners();
+    } catch (e) {
+      _error = 'Failed to save model preference: ${e.toString()}';
+      debugPrint('Error saving model preference: $e');
+      notifyListeners();
+    }
   }
 
   void addUserMessage(String content) {
-    _messages.add(ChatMessage(role: 'user', content: content));
+    _messages.add(ChatMessage(
+      role: 'user',
+      content: content,
+      model: _selectedModel,
+    ));
     notifyListeners();
   }
 
   Future<void> sendMessage(String content) async {
-    if (_selectedModel == null) return;
+    if (_selectedModel == null) {
+      _error = 'Please select a model first';
+      notifyListeners();
+      return;
+    }
+
+    if (content.trim().isEmpty) {
+      return;
+    }
 
     // Add user message immediately
     addUserMessage(content);
     
     // Create a temporary assistant message for streaming
-    var tempMessage = ChatMessage(role: 'assistant', content: '');
+    var tempMessage = ChatMessage(
+      role: 'assistant',
+      content: '',
+      model: _selectedModel,
+    );
     _messages.add(tempMessage);
     
     _isLoading = true;
     _currentStreamedResponse = '';
+    _error = null;
     notifyListeners();
 
     try {
@@ -99,20 +147,27 @@ class ChatProvider with ChangeNotifier {
         _messages,
       )) {
         _currentStreamedResponse += chunk;
-        // Replace the temporary message with updated content
+        // Update the message with the current accumulated content
         _messages[_messages.length - 1] = ChatMessage(
           role: 'assistant',
-          content: _currentStreamedResponse,
+          content: _currentStreamedResponse,  // Use accumulated content
           id: tempMessage.id,
           timestamp: tempMessage.timestamp,
+          model: _selectedModel,
         );
         notifyListeners();
       }
-
-      // Clear the streaming state
-      _currentStreamedResponse = '';
+      // After streaming is complete, the message already has the full content
+    } catch (e) {
+      _error = 'Failed to get response: ${e.toString()}';
+      // Remove the temporary message if we failed to get a response
+      if (_messages.isNotEmpty) {
+        _messages.removeLast();
+      }
+      debugPrint('Error in sendMessage: $e');
     } finally {
       _isLoading = false;
+      _currentStreamedResponse = '';
       notifyListeners();
     }
   }
@@ -120,6 +175,13 @@ class ChatProvider with ChangeNotifier {
   void clearChat() {
     _messages.clear();
     _currentStreamedResponse = '';
+    _error = null;
     notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _chatService.dispose();
+    super.dispose();
   }
 } 
