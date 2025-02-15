@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:ui';
+import 'dart:math';
 import '../services/chat_provider.dart';
 import '../theme/theme_provider.dart';
 import '../widgets/chat_message_widget.dart';
@@ -131,26 +133,49 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                 Container(
                   margin: const EdgeInsets.only(right: 12),
                   decoration: BoxDecoration(
-                    gradient: context.read<ThemeProvider>().primaryGradient,
-                    borderRadius: BorderRadius.circular(8),
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        theme.colorScheme.primary,
+                        Color.lerp(
+                          theme.colorScheme.primary,
+                          theme.colorScheme.secondary,
+                          0.3,
+                        )!,
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(16),
                     boxShadow: [
                       BoxShadow(
-                        color: theme.colorScheme.primary.withOpacity(0.2),
-                        blurRadius: 4,
+                        color: theme.colorScheme.primary.withOpacity(0.15),
+                        blurRadius: 8,
                         offset: const Offset(0, 2),
+                        spreadRadius: 0,
                       ),
                     ],
                   ),
                   child: Material(
                     color: Colors.transparent,
                     child: InkWell(
-                      onTap: _toggleSidePanel,
-                      borderRadius: BorderRadius.circular(8),
+                      onTap: () {
+                        HapticFeedback.lightImpact();
+                        _toggleSidePanel();
+                      },
+                      borderRadius: BorderRadius.circular(16),
                       child: Container(
-                        padding: const EdgeInsets.all(8),
-                        child: AnimatedRotation(
-                          duration: const Duration(milliseconds: 175),
-                          turns: _isSidePanelExpanded ? 0 : 0.5,
+                        padding: const EdgeInsets.all(10),
+                        child: TweenAnimationBuilder<double>(
+                          duration: const Duration(milliseconds: 200),
+                          curve: Curves.easeOutCubic,
+                          tween: Tween<double>(
+                            begin: _isSidePanelExpanded ? 0 : 1,
+                            end: _isSidePanelExpanded ? 0 : 1,
+                          ),
+                          builder: (context, value, child) => Transform.rotate(
+                            angle: value * pi,
+                            child: child,
+                          ),
                           child: const Icon(
                             Icons.keyboard_double_arrow_left_rounded,
                             color: Colors.white,
@@ -219,15 +244,18 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     }
 
     return Scaffold(
-      body: Stack(
+      body: Row(
         children: [
-          // Main content
-          Row(
-            children: [
-              SidePanel(isExpanded: _isSidePanelExpanded),
-              Expanded(
-                child: Column(
+          SidePanel(
+            isExpanded: _isSidePanelExpanded,
+            onToggle: _toggleSidePanel,
+          ),
+          Expanded(
+            child: Stack(
+              children: [
+                Column(
                   children: [
+                    _buildHeader(context, theme, chatProvider),
                     Expanded(
                       child: DecoratedBox(
                         decoration: BoxDecoration(
@@ -238,7 +266,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                             : ListView.builder(
                                 controller: _scrollController,
                                 padding: EdgeInsets.only(
-                                  top: kToolbarHeight * 1.2 + topPadding,
                                   bottom: 20 + MediaQuery.of(context).padding.bottom,
                                 ),
                                 physics: const AlwaysScrollableScrollPhysics(),
@@ -303,11 +330,9 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                     ),
                   ],
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-          // Header overlay
-          _buildHeader(context, theme, chatProvider),
         ],
       ),
     );
