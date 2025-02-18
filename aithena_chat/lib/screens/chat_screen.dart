@@ -20,10 +20,13 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   final ScrollController _scrollController = ScrollController();
+  final FocusNode _inputFocusNode = FocusNode();
   bool _isSidePanelExpanded = true;
   static const String _sidePanelKey = 'side_panel_expanded';
   late AnimationController _shimmerController;
-  bool _isUserScroll = true;
+  late AnimationController _scrollButtonController;
+  late Animation<double> _scrollButtonScale;
+  late Animation<double> _scrollButtonOpacity;
   bool _showScrollToBottom = false;
 
   @override
@@ -37,28 +40,55 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       vsync: this,
     )..repeat();
 
+    _scrollButtonController = AnimationController(
+      duration: const Duration(milliseconds: 150),
+      vsync: this,
+    );
+
+    _scrollButtonScale = Tween<double>(
+      begin: 0.0,
+      end: 1.0,
+    ).animate(CurvedAnimation(
+      parent: _scrollButtonController,
+      curve: Curves.easeOut,
+      reverseCurve: Curves.easeIn,
+    ));
+
+    _scrollButtonOpacity = Tween<double>(
+      begin: 0.0,
+      end: 1.0,
+    ).animate(CurvedAnimation(
+      parent: _scrollButtonController,
+      curve: Curves.easeOut,
+    ));
+
     _scrollController.addListener(_handleScroll);
   }
 
   void _handleScroll() {
     if (!_scrollController.hasClients) return;
+    _updateScrollButtonVisibility();
+  }
+
+  void _updateScrollButtonVisibility() {
+    if (!_scrollController.hasClients) return;
     
-    // Check if user has scrolled up
     final position = _scrollController.position;
-    final showButton = position.pixels < position.maxScrollExtent - 100;
+    final maxScroll = position.maxScrollExtent;
+    final currentScroll = position.pixels;
+    
+    // Show button if we're not at the bottom
+    final showButton = currentScroll < maxScroll - 10;
     
     if (showButton != _showScrollToBottom) {
       setState(() {
         _showScrollToBottom = showButton;
       });
-    }
-
-    // Check if we're at the bottom (with a smaller threshold)
-    final isAtBottom = position.pixels >= position.maxScrollExtent - 20;
-    if (isAtBottom != !_isUserScroll) {
-      setState(() {
-        _isUserScroll = !isAtBottom;
-      });
+      if (showButton) {
+        _scrollButtonController.forward(from: 0);
+      } else {
+        _scrollButtonController.reverse();
+      }
     }
   }
 
@@ -66,6 +96,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   void dispose() {
     _scrollController.removeListener(_handleScroll);
     _shimmerController.dispose();
+    _scrollButtonController.dispose();
+    _inputFocusNode.dispose();
     super.dispose();
   }
 
@@ -97,12 +129,35 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   void _scrollToBottom() {
     if (!_scrollController.hasClients) return;
     
-    final position = _scrollController.position;
-    final target = position.maxScrollExtent + 
-                  MediaQuery.of(context).padding.bottom;
+    _scrollController.animateTo(
+      _scrollController.position.maxScrollExtent,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
+    );
+    _inputFocusNode.requestFocus();
+  }
+
+  void _scrollToShowNewMessage() {
+    if (!_scrollController.hasClients) return;
     
-    // Always jump to bottom during streaming for smooth experience
-    _scrollController.jumpTo(target);
+    // First jump to bottom to ensure message is rendered
+    _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+    
+    // Then do a small animation to give visual feedback
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scrollController.hasClients) return;
+      
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 100),
+        curve: Curves.easeOut,
+      );
+    });
+  }
+
+  double _calculateMessageSpacing(bool isNewUserMessage) {
+    // Not needed anymore since we're using reverse: true
+    return 0;
   }
 
   Widget _buildHeader(BuildContext context, ThemeData theme, ChatProvider chatProvider) {
@@ -125,7 +180,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
             ),
             child: Row(
               children: [
-                // Side Panel Toggle Button
                 Container(
                   margin: const EdgeInsets.only(right: 12),
                   decoration: BoxDecoration(
@@ -182,7 +236,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                     ),
                   ),
                 ),
-                // Model Selector
                 if (chatProvider.selectedModel != null)
                   Flexible(
                     child: ConstrainedBox(
@@ -234,18 +287,19 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final chatProvider = context.watch<ChatProvider>();
     final messages = chatProvider.messages;
     final topPadding = MediaQuery.of(context).padding.top;
+    final bottomPadding = MediaQuery.of(context).padding.bottom;
+    final viewportHeight = MediaQuery.of(context).size.height;
 
-    // Auto-scroll logic
-    if (chatProvider.isLoading) {
-      if (chatProvider.currentStreamedResponse.isEmpty) {
-        // Immediate scroll when message is first sent
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) _scrollToBottom();
-        });
-      } else if (!_isUserScroll) {
-        // Smooth scroll during streaming
-        _scrollToBottom();
-      }
+    // Update scroll button visibility and scroll to new messages
+    if (mounted && _scrollController.hasClients) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _updateScrollButtonVisibility();
+        
+        // Only scroll for new user messages, not for streaming responses
+        if (messages.isNotEmpty && messages.last.isUser) {
+          _scrollToShowNewMessage();
+        }
+      });
     }
 
     return Scaffold(
@@ -266,141 +320,155 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                         decoration: BoxDecoration(
                           color: theme.colorScheme.background,
                         ),
-                        child: messages.isEmpty
-                            ? _buildEmptyState(theme)
-                            : Stack(
-                                children: [
-                                  ListView.builder(
-                                    controller: _scrollController,
-                                    padding: EdgeInsets.only(
-                                      bottom: 20 + MediaQuery.of(context).padding.bottom,
-                                    ),
-                                    physics: const AlwaysScrollableScrollPhysics(),
-                                    itemCount: messages.length,
-                                    itemBuilder: (context, index) {
-                                      final message = messages[index];
-                                      final isLastMessage = index == messages.length - 1;
-                                      final isStreaming = isLastMessage && chatProvider.isLoading;
+                        child: Stack(
+                          children: [
+                            AnimatedOpacity(
+                              duration: const Duration(milliseconds: 200),
+                              opacity: messages.isEmpty ? 1.0 : 0.0,
+                              child: IgnorePointer(
+                                ignoring: !messages.isEmpty,
+                                child: _buildEmptyState(theme),
+                              ),
+                            ),
+                            AnimatedOpacity(
+                              duration: const Duration(milliseconds: 200),
+                              opacity: messages.isEmpty ? 0.0 : 1.0,
+                              child: IgnorePointer(
+                                ignoring: messages.isEmpty,
+                                child: ClipRect(
+                                  child: Stack(
+                                    children: [
+                                      ListView.builder(
+                                        key: const ValueKey('messages_list'),
+                                        controller: _scrollController,
+                                        padding: EdgeInsets.only(
+                                          top: 8,
+                                          bottom: MediaQuery.of(context).padding.bottom + 15,
+                                        ),
+                                        physics: const AlwaysScrollableScrollPhysics(),
+                                        reverse: false,
+                                        itemCount: messages.length,
+                                        itemBuilder: (context, index) {
+                                          final message = messages[index];
+                                          final isLastMessage = index == messages.length - 1;
+                                          final isStreaming = isLastMessage && chatProvider.isLoading;
 
-                                      return ChatMessageWidget(
-                                        key: ValueKey(message.id),
-                                        message: message,
-                                        isStreaming: isStreaming,
-                                        streamedContent: chatProvider.currentStreamedResponse,
-                                      );
-                                    },
-                                  ),
-                                  if (_showScrollToBottom)
-                                    Positioned(
-                                      right: 16,
-                                      bottom: 16,
-                                      child: AnimatedScale(
-                                        scale: _showScrollToBottom ? 1.0 : 0.0,
-                                        duration: const Duration(milliseconds: 200),
-                                        curve: Curves.easeOutCubic,
-                                        child: Container(
-                                          decoration: BoxDecoration(
-                                            gradient: LinearGradient(
-                                              begin: Alignment.topLeft,
-                                              end: Alignment.bottomRight,
-                                              colors: [
-                                                theme.colorScheme.primary,
-                                                Color.lerp(
-                                                  theme.colorScheme.primary,
-                                                  theme.colorScheme.secondary,
-                                                  0.3,
-                                                )!,
-                                              ],
-                                            ),
-                                            borderRadius: BorderRadius.circular(24),
-                                            boxShadow: [
-                                              BoxShadow(
-                                                color: theme.colorScheme.primary.withOpacity(0.15),
-                                                blurRadius: 8,
-                                                offset: const Offset(0, 2),
-                                                spreadRadius: 0,
-                                              ),
-                                            ],
-                                          ),
-                                          child: Material(
-                                            color: Colors.transparent,
-                                            child: InkWell(
-                                              onTap: () {
-                                                HapticFeedback.lightImpact();
-                                                _scrollToBottom();
-                                              },
-                                              borderRadius: BorderRadius.circular(24),
-                                              child: Container(
-                                                padding: const EdgeInsets.symmetric(
-                                                  horizontal: 16,
-                                                  vertical: 12,
+                                          return ChatMessageWidget(
+                                            key: ValueKey(message.id),
+                                            message: message,
+                                            isStreaming: isStreaming,
+                                            streamedContent: chatProvider.currentStreamedResponse,
+                                          );
+                                        },
+                                      ),
+                                      Positioned(
+                                        left: 0,
+                                        right: 0,
+                                        bottom: -4,
+                                        child: Center(
+                                          child: AnimatedBuilder(
+                                            animation: _scrollButtonController,
+                                            builder: (context, child) {
+                                              return Opacity(
+                                                opacity: _scrollButtonOpacity.value,
+                                                child: Transform.scale(
+                                                  scale: _scrollButtonScale.value,
+                                                  child: child,
                                                 ),
-                                                child: Row(
-                                                  mainAxisSize: MainAxisSize.min,
-                                                  children: [
-                                                    const Icon(
-                                                      Icons.arrow_downward_rounded,
-                                                      color: Colors.white,
-                                                      size: 20,
-                                                    ),
-                                                    const SizedBox(width: 8),
-                                                    Text(
-                                                      'Scroll to Bottom',
-                                                      style: theme.textTheme.labelLarge?.copyWith(
-                                                        color: Colors.white,
-                                                        fontWeight: FontWeight.w500,
-                                                      ),
+                                              );
+                                            },
+                                            child: Padding(
+                                              padding: const EdgeInsets.only(bottom: 16),
+                                              child: Container(
+                                                decoration: BoxDecoration(
+                                                  gradient: LinearGradient(
+                                                    begin: Alignment.topLeft,
+                                                    end: Alignment.bottomRight,
+                                                    colors: [
+                                                      theme.colorScheme.primary,
+                                                      Color.lerp(
+                                                        theme.colorScheme.primary,
+                                                        theme.colorScheme.secondary,
+                                                        0.3,
+                                                      )!,
+                                                    ],
+                                                  ),
+                                                  borderRadius: BorderRadius.circular(24),
+                                                  boxShadow: [
+                                                    BoxShadow(
+                                                      color: theme.colorScheme.primary.withOpacity(0.15),
+                                                      blurRadius: 8,
+                                                      offset: const Offset(0, 2),
+                                                      spreadRadius: 0,
                                                     ),
                                                   ],
+                                                ),
+                                                child: Material(
+                                                  color: Colors.transparent,
+                                                  child: InkWell(
+                                                    onTap: () {
+                                                      HapticFeedback.lightImpact();
+                                                      _scrollToBottom();
+                                                    },
+                                                    borderRadius: BorderRadius.circular(24),
+                                                    child: Container(
+                                                      padding: const EdgeInsets.all(8),
+                                                      child: const Icon(
+                                                        Icons.arrow_downward_rounded,
+                                                        color: Colors.white,
+                                                        size: 16,
+                                                      ),
+                                                    ),
+                                                  ),
                                                 ),
                                               ),
                                             ),
                                           ),
                                         ),
                                       ),
-                                    ),
-                                ],
+                                    ],
+                                  ),
+                                ),
                               ),
-                      ),
-                    ),
-                    // Message input at bottom
-                    Padding(
-                      padding: const EdgeInsets.only(
-                        left: 16,
-                        right: 16,
-                        bottom: 16,
-                        top: 8,
-                      ),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: theme.colorScheme.surface.withOpacity(0.7),
-                          borderRadius: BorderRadius.circular(24),
-                          boxShadow: [
-                            BoxShadow(
-                              color: theme.colorScheme.shadow.withOpacity(0.1),
-                              blurRadius: 12,
-                              offset: const Offset(0, 4),
-                              spreadRadius: 0,
-                            ),
-                            BoxShadow(
-                              color: theme.colorScheme.primary.withOpacity(0.05),
-                              blurRadius: 3,
-                              offset: const Offset(0, 2),
-                              spreadRadius: -1,
                             ),
                           ],
                         ),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(24),
-                          child: BackdropFilter(
-                            filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(vertical: 8),
-                              color: Colors.transparent,
-                              child: MessageInput(
-                                onSubmit: chatProvider.sendMessage,
-                                isLoading: chatProvider.isLoading,
-                              ),
+                      ),
+                    ),
+                    Container(
+                      margin: EdgeInsets.only(
+                        left: 16,
+                        right: 16,
+                        bottom: bottomPadding + 8.0,
+                        top: 0,
+                      ),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.surface.withOpacity(0.7),
+                        borderRadius: BorderRadius.circular(24),
+                        boxShadow: [
+                          BoxShadow(
+                            color: theme.colorScheme.shadow.withOpacity(0.08),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                            spreadRadius: 0,
+                          ),
+                        ],
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(24),
+                        child: BackdropFilter(
+                          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            color: Colors.transparent,
+                            child: MessageInput(
+                              onSubmit: (content) {
+                                chatProvider.sendMessage(content);
+                                // Immediately scroll after user message is added
+                                _scrollToShowNewMessage();
+                              },
+                              isLoading: chatProvider.isLoading,
+                              focusNode: _inputFocusNode,
                             ),
                           ),
                         ),
@@ -417,50 +485,62 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   }
 
   Widget _buildEmptyState(ThemeData theme) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 24),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Container(
-              width: 120,
-              height: 120,
-              decoration: BoxDecoration(
-                gradient: context.read<ThemeProvider>().primaryGradient,
-                borderRadius: BorderRadius.circular(60),
-                boxShadow: [
-                  BoxShadow(
-                    color: theme.colorScheme.primary.withOpacity(0.2),
-                    blurRadius: 20,
-                    offset: const Offset(0, 10),
-                  ),
-                ],
-              ),
-              child: const Icon(
-                Icons.chat_bubble_outline_rounded,
-                color: Colors.white,
-                size: 48,
-              ),
-            ),
-            const SizedBox(height: 24),
-            Text(
-              'Start a Conversation',
-              style: theme.textTheme.displayMedium,
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 12),
-            Text(
-              'Select a model and start chatting',
-              style: theme.textTheme.bodyLarge!.copyWith(
-                color: theme.colorScheme.onBackground.withOpacity(0.7),
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
+    return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: EdgeInsets.only(
+        top: 8,
+        bottom: 30 + MediaQuery.of(context).padding.bottom,
       ),
+      children: [
+        SizedBox(
+          height: MediaQuery.of(context).size.height * 0.3,
+        ),
+        Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Container(
+                  width: 120,
+                  height: 120,
+                  decoration: BoxDecoration(
+                    gradient: context.read<ThemeProvider>().primaryGradient,
+                    borderRadius: BorderRadius.circular(60),
+                    boxShadow: [
+                      BoxShadow(
+                        color: theme.colorScheme.primary.withOpacity(0.2),
+                        blurRadius: 20,
+                        offset: const Offset(0, 10),
+                      ),
+                    ],
+                  ),
+                  child: const Icon(
+                    Icons.chat_bubble_outline_rounded,
+                    color: Colors.white,
+                    size: 48,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Text(
+                  'Start a Conversation',
+                  style: theme.textTheme.displayMedium,
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Select a model and start chatting',
+                  style: theme.textTheme.bodyLarge!.copyWith(
+                    color: theme.colorScheme.onBackground.withOpacity(0.7),
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 } 

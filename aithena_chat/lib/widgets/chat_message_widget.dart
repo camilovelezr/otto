@@ -81,52 +81,50 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
 
   Widget _buildCodeBlock(ThemeData theme, String code, String? language) {
     final isDark = theme.brightness == Brightness.dark;
+    final headerBgColor = isDark ? const Color(0xFF21252B) : const Color(0xFFF0F0F0);
+    final contentBgColor = isDark ? const Color(0xFF282C34) : const Color(0xFFFAFAFA);
     
-    return Container(
-      margin: EdgeInsets.zero,
+    return Material(
+      color: contentBgColor,
+      borderRadius: BorderRadius.circular(8),
       clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF282C34) : const Color(0xFFFAFAFA),
-        borderRadius: BorderRadius.circular(8),
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            decoration: BoxDecoration(
-              color: isDark ? const Color(0xFF21252B) : const Color(0xFFF0F0F0),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  language ?? 'plain text',
-                  style: theme.textTheme.bodySmall!.copyWith(
-                    color: isDark 
-                        ? const Color(0xFF9DA5B4)
-                        : const Color(0xFF383A42),
-                  ),
-                ),
-                MouseRegion(
-                  cursor: SystemMouseCursors.click,
-                  child: GestureDetector(
-                    onTap: () => Clipboard.setData(ClipboardData(text: code)),
-                    child: Icon(
-                      Icons.content_copy,
-                      size: 18,
+          Material(
+            color: headerBgColor,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    language ?? 'plain text',
+                    style: theme.textTheme.bodySmall!.copyWith(
                       color: isDark 
                           ? const Color(0xFF9DA5B4)
                           : const Color(0xFF383A42),
                     ),
                   ),
-                ),
-              ],
+                  MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: GestureDetector(
+                      onTap: () => Clipboard.setData(ClipboardData(text: code)),
+                      child: Icon(
+                        Icons.content_copy_rounded,
+                        size: 18,
+                        color: isDark 
+                            ? const Color(0xFF9DA5B4)
+                            : const Color(0xFF383A42),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
-          Container(
+          Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            color: isDark ? const Color(0xFF282C34) : const Color(0xFFFAFAFA),
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: HighlightView(
@@ -237,87 +235,194 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
       (match) => '`${match.group(0)}`'
     );
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        MarkdownBody(
-          data: content,
-          selectable: true,
-          softLineBreak: true,
-          styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
-            textScaleFactor: 1.0,
-            blockSpacing: 16,
-            listIndent: 24,
-            a: theme.textTheme.bodyLarge!.copyWith(color: isDark ? Colors.white : null),
-            p: theme.textTheme.bodyLarge!.copyWith(color: isDark ? Colors.white : null),
-            code: theme.textTheme.bodyMedium!.copyWith(color: isDark ? Colors.white : null),
-            h1: theme.textTheme.headlineMedium!.copyWith(color: isDark ? Colors.white : null),
-            h2: theme.textTheme.headlineSmall!.copyWith(color: isDark ? Colors.white : null),
-            h3: theme.textTheme.titleLarge!.copyWith(color: isDark ? Colors.white : null),
-            h4: theme.textTheme.titleMedium!.copyWith(color: isDark ? Colors.white : null),
-            h5: theme.textTheme.titleSmall!.copyWith(color: isDark ? Colors.white : null),
-            h6: theme.textTheme.bodyLarge!.copyWith(color: isDark ? Colors.white : null),
-            em: theme.textTheme.bodyLarge!.copyWith(
-              color: isDark ? Colors.white : null,
-              fontStyle: FontStyle.italic,
-            ),
-            strong: theme.textTheme.bodyLarge!.copyWith(
-              color: isDark ? Colors.white : null,
-              fontWeight: FontWeight.bold,
-            ),
-            del: theme.textTheme.bodyLarge!.copyWith(
-              color: isDark ? Colors.white : null,
-              decoration: TextDecoration.lineThrough,
-            ),
-            listBullet: theme.textTheme.bodyLarge!.copyWith(color: isDark ? Colors.white : null),
+    // Normalize line endings and ensure consistent spacing for both streaming and non-streaming
+    content = content.replaceAll('\r\n', '\n');
+    
+    // Replace multiple newlines with exactly two newlines and a zero-width space
+    content = content.replaceAllMapped(
+      RegExp(r'\n{2,}'),
+      (match) => '\n\u200B\n'
+    );
+    
+    if (widget.isStreaming) {
+      // Handle code blocks with proper spacing
+      final codeBlockRegex = RegExp(r'```(\w*)\n([\s\S]*?)```', multiLine: true);
+      content = content.replaceAllMapped(codeBlockRegex, (match) {
+        final language = match.group(1) ?? '';
+        final code = match.group(2) ?? '';
+        return '\n```$language\n${code.trim()}\n```\n';
+      });
+
+      // Handle inline code with consistent spacing
+      content = content.replaceAllMapped(
+        RegExp(r'`([^`]+)`'),
+        (match) => '`${match.group(1)?.trim() ?? ''}`'
+      );
+
+      // Handle headers with consistent spacing
+      content = content.replaceAllMapped(
+        RegExp(r'^(#{1,6})\s*(.+)$', multiLine: true),
+        (match) => '\n${match.group(1)} ${match.group(2)?.trim()}\n'
+      );
+
+      // Handle lists with consistent spacing
+      content = content.replaceAllMapped(
+        RegExp(r'^(\s*[-*+])\s*(.+)$', multiLine: true),
+        (match) => '${match.group(1)} ${match.group(2)?.trim()}\n'
+      );
+
+      // Ensure content ends with newline
+      if (!content.endsWith('\n')) {
+        content = '$content\n';
+      }
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return Container(
+          constraints: BoxConstraints(
+            minHeight: 24.0, // Minimum height for single line
+            maxWidth: constraints.maxWidth,
           ),
-          builders: {
-            'code': CodeElementBuilder(
-              theme,
-              context,
-              customBuilder: (String text, String? language, bool isInline) {
-                if (isInline) {
-                  // For XML tags, use a more subtle style
-                  if (text.startsWith('<') && text.endsWith('>')) {
-                    return Text.rich(
-                      TextSpan(
-                        text: text,
-                        style: theme.textTheme.bodyLarge!.copyWith(
-                          color: isDark
-                              ? Colors.white.withOpacity(0.9)
-                              : theme.colorScheme.onSurface.withOpacity(0.9),
+          child: Stack(
+            children: [
+              SelectableRegion(
+                focusNode: FocusNode(),
+                selectionControls: MaterialTextSelectionControls(),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    MarkdownBody(
+                      data: content,
+                      selectable: true,
+                      softLineBreak: true,
+                      fitContent: true,
+                      shrinkWrap: true,
+                      styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
+                        h1Padding: EdgeInsets.zero,
+                        h2Padding: EdgeInsets.zero,
+                        h3Padding: EdgeInsets.zero,
+                        h4Padding: EdgeInsets.zero,
+                        h5Padding: EdgeInsets.zero,
+                        h6Padding: EdgeInsets.zero,
+                        pPadding: EdgeInsets.zero,
+                        listIndent: 24,
+                        blockSpacing: 8,
+                        codeblockPadding: EdgeInsets.zero,
+                        textScaleFactor: 1.0,
+                        a: theme.textTheme.bodyLarge!.copyWith(color: isDark ? Colors.white : null),
+                        p: theme.textTheme.bodyLarge!.copyWith(
+                          color: isDark ? Colors.white : null,
+                          height: 1.5,
+                          leadingDistribution: TextLeadingDistribution.even,
+                        ),
+                        code: theme.textTheme.bodyMedium!.copyWith(
+                          color: isDark ? Colors.white : null,
+                          height: 1.5,
+                          leadingDistribution: TextLeadingDistribution.even,
+                        ),
+                        h1: theme.textTheme.headlineMedium!.copyWith(
+                          color: isDark ? Colors.white : null,
+                          height: 1.5,
+                        ),
+                        h2: theme.textTheme.headlineSmall!.copyWith(
+                          color: isDark ? Colors.white : null,
+                          height: 1.5,
+                        ),
+                        h3: theme.textTheme.titleLarge!.copyWith(
+                          color: isDark ? Colors.white : null,
+                          height: 1.5,
+                        ),
+                        h4: theme.textTheme.titleMedium!.copyWith(
+                          color: isDark ? Colors.white : null,
+                          height: 1.5,
+                        ),
+                        h5: theme.textTheme.titleSmall!.copyWith(
+                          color: isDark ? Colors.white : null,
+                          height: 1.5,
+                        ),
+                        h6: theme.textTheme.bodyLarge!.copyWith(
+                          color: isDark ? Colors.white : null,
+                          height: 1.5,
+                        ),
+                        em: theme.textTheme.bodyLarge!.copyWith(
+                          color: isDark ? Colors.white : null,
+                          fontStyle: FontStyle.italic,
+                          height: 1.5,
+                        ),
+                        strong: theme.textTheme.bodyLarge!.copyWith(
+                          color: isDark ? Colors.white : null,
+                          fontWeight: FontWeight.bold,
+                          height: 1.5,
+                        ),
+                        del: theme.textTheme.bodyLarge!.copyWith(
+                          color: isDark ? Colors.white : null,
+                          decoration: TextDecoration.lineThrough,
+                          height: 1.5,
+                        ),
+                        listBullet: theme.textTheme.bodyLarge!.copyWith(
+                          color: isDark ? Colors.white : null,
                           height: 1.5,
                         ),
                       ),
-                      softWrap: true,
-                    );
-                  }
-                  // For other inline code
-                  return Text.rich(
-                    TextSpan(
-                      text: text.trim(),
-                      style: GoogleFonts.firaCode(
-                        fontSize: theme.textTheme.bodyMedium!.fontSize,
-                        color: isDark
-                            ? Colors.white.withOpacity(0.9)
-                            : theme.colorScheme.primary,
-                        backgroundColor: isDark
-                            ? Colors.black.withOpacity(0.3)
-                            : Colors.black.withOpacity(0.05),
-                        height: 1.5,
-                        letterSpacing: 0,
-                      ),
+                      builders: {
+                        'code': CodeElementBuilder(
+                          theme,
+                          context,
+                          customBuilder: (String text, String? language, bool isInline) {
+                            if (isInline) {
+                              // For XML tags, use a more subtle style
+                              if (text.startsWith('<') && text.endsWith('>')) {
+                                return Text.rich(
+                                  TextSpan(
+                                    text: text,
+                                    style: theme.textTheme.bodyLarge!.copyWith(
+                                      color: isDark
+                                          ? Colors.white.withOpacity(0.9)
+                                          : theme.colorScheme.onSurface.withOpacity(0.9),
+                                      height: 1.5,
+                                    ),
+                                  ),
+                                  softWrap: true,
+                                );
+                              }
+                              // For other inline code
+                              return Text.rich(
+                                TextSpan(
+                                  text: text.trim(),
+                                  style: GoogleFonts.firaCode(
+                                    fontSize: theme.textTheme.bodyMedium!.fontSize,
+                                    color: isDark
+                                        ? Colors.white.withOpacity(0.9)
+                                        : theme.colorScheme.primary,
+                                    backgroundColor: isDark
+                                        ? Colors.black.withOpacity(0.3)
+                                        : Colors.black.withOpacity(0.05),
+                                    height: 1.5,
+                                    letterSpacing: 0,
+                                  ),
+                                ),
+                                softWrap: true,
+                              );
+                            }
+                            return _buildCodeBlock(theme, text, language);
+                          },
+                        ),
+                      },
                     ),
-                    softWrap: true,
-                  );
-                }
-                return _buildCodeBlock(theme, text, language);
-              },
-            ),
-          },
-        ),
-        if (widget.isStreaming) _buildTypingIndicator(theme),
-      ],
+                    if (widget.isStreaming) 
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: _buildTypingIndicator(theme),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -337,7 +442,7 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
             child: Padding(
               padding: const EdgeInsets.symmetric(
                 horizontal: 16,
-                vertical: 8,
+                vertical: 2,
               ),
               child: Column(
                 crossAxisAlignment: isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
@@ -404,7 +509,7 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
                     Padding(
                       padding: const EdgeInsets.only(left: 48, top: 4),
                       child: IconButton(
-                        icon: const Icon(Icons.copy_all, size: 20),
+                        icon: const Icon(Icons.content_copy_rounded, size: 20),
                         onPressed: () => Clipboard.setData(
                           ClipboardData(text: widget.message.content),
                         ),
@@ -467,11 +572,11 @@ class CodeElementBuilder extends MarkdownElementBuilder {
     }
 
     return Container(
+      margin: EdgeInsets.zero,
       decoration: BoxDecoration(
-        color: theme.colorScheme.surface.withOpacity(0.7),
+        color: theme.colorScheme.surface,
         borderRadius: BorderRadius.circular(8),
       ),
-      padding: const EdgeInsets.all(16),
       child: SelectableText(
         element.textContent.trim(),
         style: preferredStyle,

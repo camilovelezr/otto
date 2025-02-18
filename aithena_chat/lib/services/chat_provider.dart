@@ -175,7 +175,7 @@ class ChatProvider with ChangeNotifier {
         model: _selectedModel,
       );
       _messages[_messages.length - 1] = finalMessage;
-      notifyListeners();
+      
     } catch (e) {
       _error = 'Failed to get response: ${e.toString()}';
       debugPrint('Error in sendMessage: $e');
@@ -183,7 +183,6 @@ class ChatProvider with ChangeNotifier {
       if (_messages.isNotEmpty) {
         _messages.removeLast();
       }
-      notifyListeners();
     } finally {
       _isLoading = false;
       _currentStreamedResponse = '';

@@ -7,11 +7,13 @@ import 'dart:ui' as ui show BoxHeightStyle, BoxWidthStyle;
 class MessageInput extends StatefulWidget {
   final Function(String) onSubmit;
   final bool isLoading;
+  final FocusNode? focusNode;
 
   const MessageInput({
     Key? key,
     required this.onSubmit,
     this.isLoading = false,
+    this.focusNode,
   }) : super(key: key);
 
   @override
@@ -20,11 +22,12 @@ class MessageInput extends StatefulWidget {
 
 class _MessageInputState extends State<MessageInput> {
   final TextEditingController _controller = TextEditingController();
-  final FocusNode _focusNode = FocusNode();
+  late final FocusNode _focusNode;
 
   @override
   void initState() {
     super.initState();
+    _focusNode = widget.focusNode ?? FocusNode();
     // Delay focus request to ensure proper initialization
     Future.delayed(const Duration(milliseconds: 100), () {
       if (mounted) _focusNode.requestFocus();
@@ -34,7 +37,9 @@ class _MessageInputState extends State<MessageInput> {
   @override
   void dispose() {
     _controller.dispose();
-    _focusNode.dispose();
+    if (widget.focusNode == null) {
+      _focusNode.dispose();
+    }
     super.dispose();
   }
 
@@ -44,17 +49,7 @@ class _MessageInputState extends State<MessageInput> {
 
     widget.onSubmit(text);
     _controller.clear();
-    // Reset to single line after clearing
-    setState(() {});
-    
-    // Delay focus request to ensure proper state update
-    Future.delayed(const Duration(milliseconds: 100), () {
-      if (mounted) {
-        _focusNode.requestFocus();
-        // Ensure the text field is empty and reset
-        _controller.value = TextEditingValue.empty;
-      }
-    });
+    _focusNode.requestFocus();
   }
 
   @override
@@ -74,15 +69,16 @@ class _MessageInputState extends State<MessageInput> {
                 cursorColor: theme.colorScheme.primary,
                 selectionHandleColor: theme.colorScheme.primary,
               ),
-              child: KeyboardListener(
+              child: RawKeyboardListener(
                 focusNode: FocusNode(),
-                onKeyEvent: (event) {
-                  if (event is KeyDownEvent) {
+                onKey: (event) {
+                  if (event is RawKeyDownEvent) {
                     final bool isEnterPressed = event.logicalKey == LogicalKeyboardKey.enter;
-                    final bool isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
+                    final bool isShiftPressed = event.isShiftPressed;
 
                     if (isEnterPressed && !isShiftPressed) {
                       _handleSubmit();
+                      return;
                     }
                   }
                 },
@@ -91,16 +87,13 @@ class _MessageInputState extends State<MessageInput> {
                   focusNode: _focusNode,
                   maxLines: 6,
                   minLines: 1,
-                  textInputAction: TextInputAction.newline,
+                  textInputAction: TextInputAction.none,
                   onSubmitted: (_) => _handleSubmit(),
                   onChanged: (text) {
                     // Only rebuild if text is not empty (avoid empty line height)
                     if (text.isNotEmpty) {
                       setState(() {});
                     }
-                  },
-                  onEditingComplete: () {
-                    // Prevent default Enter behavior
                   },
                   keyboardType: TextInputType.multiline,
                   onTapOutside: (event) => _focusNode.unfocus(),
