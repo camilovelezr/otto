@@ -48,7 +48,8 @@ class _MessageInputState extends State<MessageInput> {
     if (text.isEmpty || widget.isLoading) return;
 
     widget.onSubmit(text);
-    _controller.clear();
+    // Reset the controller with empty text and cursor at the start
+    _controller.text = '';
     _focusNode.requestFocus();
   }
 
@@ -76,9 +77,10 @@ class _MessageInputState extends State<MessageInput> {
                     final bool isEnterPressed = event.logicalKey == LogicalKeyboardKey.enter;
                     final bool isShiftPressed = event.isShiftPressed;
 
-                    if (isEnterPressed && !isShiftPressed) {
-                      _handleSubmit();
-                      return;
+                    if (isEnterPressed) {
+                      if (!isShiftPressed) {
+                        _handleSubmit();
+                      }
                     }
                   }
                 },
@@ -87,15 +89,14 @@ class _MessageInputState extends State<MessageInput> {
                   focusNode: _focusNode,
                   maxLines: 6,
                   minLines: 1,
-                  textInputAction: TextInputAction.none,
-                  onSubmitted: (_) => _handleSubmit(),
+                  textInputAction: TextInputAction.newline,
+                  keyboardType: TextInputType.multiline,
                   onChanged: (text) {
                     // Only rebuild if text is not empty (avoid empty line height)
                     if (text.isNotEmpty) {
                       setState(() {});
                     }
                   },
-                  keyboardType: TextInputType.multiline,
                   onTapOutside: (event) => _focusNode.unfocus(),
                   autofocus: false,
                   cursorWidth: 2.5,
@@ -105,6 +106,18 @@ class _MessageInputState extends State<MessageInput> {
                   style: theme.textTheme.bodyLarge?.copyWith(
                     height: 1.5,
                   ),
+                  inputFormatters: [
+                    TextInputFormatter.withFunction((oldValue, newValue) {
+                      // Only prevent newlines when they're not from shift+enter
+                      if (newValue.text.endsWith('\n') && 
+                          oldValue.text == newValue.text.substring(0, newValue.text.length - 1) &&
+                          !RawKeyboard.instance.keysPressed.contains(LogicalKeyboardKey.shiftLeft) &&
+                          !RawKeyboard.instance.keysPressed.contains(LogicalKeyboardKey.shiftRight)) {
+                        return oldValue;
+                      }
+                      return newValue;
+                    }),
+                  ],
                   decoration: InputDecoration(
                     hintText: 'Type a message...',
                     hintStyle: TextStyle(

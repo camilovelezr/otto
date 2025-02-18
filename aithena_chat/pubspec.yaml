@@ -1,5 +1,5 @@
-name: aithena_chat
-description: A beautiful and modern chat interface for AI models.
+name: otto
+description: A beautiful and modern chat interface powered by Otto.
 publish_to: "none"
 version: 1.0.0+1
 
@@ -24,12 +24,24 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
+  flutter_launcher_icons: ^0.13.1
+
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "../Bear Peanut Butter Logo.png"
+  macos:
+    generate: true
+    image_path: "../Bear Peanut Butter Logo.png"
+  remove_alpha_ios: true
+  min_sdk_android: 21
 
 flutter:
   uses-material-design: true
 
   assets:
     - .env
+    - assets/images/
 
   fonts:
     - family: Inter

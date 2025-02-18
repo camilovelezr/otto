@@ -24,7 +24,7 @@ class MyApp extends StatelessWidget {
       child: Consumer<ThemeProvider>(
         builder: (context, themeProvider, _) {
           return MaterialApp(
-            title: 'Aithena Chat',
+            title: 'Otto',
             debugShowCheckedModeBanner: false,
             theme: themeProvider.currentTheme,
             home: const ChatScreen(),
