@@ -175,35 +175,6 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
     );
   }
 
-  Widget _buildAvatar(ThemeData theme) {
-    return Container(
-      width: 36,
-      height: 36,
-      decoration: BoxDecoration(
-        gradient: widget.message.isUser
-            ? context.read<ThemeProvider>().primaryGradient
-            : context.read<ThemeProvider>().secondaryGradient,
-        borderRadius: BorderRadius.circular(18),
-        boxShadow: [
-          BoxShadow(
-            color: theme.colorScheme.primary.withOpacity(0.2),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Center(
-        child: Icon(
-          widget.message.isUser
-              ? Icons.person_rounded
-              : Icons.smart_toy_rounded,
-          color: Colors.white,
-          size: 20,
-        ),
-      ),
-    );
-  }
-
   Widget _buildMessageContent(ThemeData theme) {
     final isDark = theme.brightness == Brightness.dark;
     
@@ -452,8 +423,6 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
                         isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (!isUser) _buildAvatar(theme),
-                      const SizedBox(width: 12),
                       Flexible(
                         child: Container(
                           constraints: BoxConstraints(
@@ -501,13 +470,11 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
                           child: _buildMessageContent(theme),
                         ),
                       ),
-                      const SizedBox(width: 12),
-                      if (isUser) _buildAvatar(theme),
                     ],
                   ),
                   if (!isUser && !widget.isStreaming)
                     Padding(
-                      padding: const EdgeInsets.only(left: 48, top: 4),
+                      padding: const EdgeInsets.only(left: 8, top: 4),
                       child: IconButton(
                         icon: const Icon(Icons.content_copy_rounded, size: 20),
                         onPressed: () => Clipboard.setData(
