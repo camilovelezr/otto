@@ -12,6 +12,20 @@ import 'package:flutter_highlight/flutter_highlight.dart';
 import 'package:flutter_highlight/themes/atom-one-dark.dart';
 import 'package:flutter_highlight/themes/atom-one-light.dart';
 
+extension ColorExtension on Color {
+  Color darken([double amount = 0.1]) {
+    assert(amount >= 0 && amount <= 1);
+    final hsl = HSLColor.fromColor(this);
+    return hsl.withLightness((hsl.lightness - amount).clamp(0.0, 1.0)).toColor();
+  }
+
+  Color lighten([double amount = 0.1]) {
+    assert(amount >= 0 && amount <= 1);
+    final hsl = HSLColor.fromColor(this);
+    return hsl.withLightness((hsl.lightness + amount).clamp(0.0, 1.0)).toColor();
+  }
+}
+
 class ChatMessageWidget extends StatefulWidget {
   final ChatMessage message;
   final bool isStreaming;
@@ -33,8 +47,6 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
   late AnimationController _animationController;
   late Animation<double> _scaleAnimation;
   late Animation<double> _opacityAnimation;
-  String _processedContent = '';
-  bool _isProcessing = false;
 
   @override
   void initState() {
@@ -59,61 +71,6 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
     );
 
     _animationController.forward();
-    _updateProcessedContent();
-  }
-
-  @override
-  void didUpdateWidget(ChatMessageWidget oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.streamedContent != widget.streamedContent ||
-        oldWidget.message.content != widget.message.content) {
-      _updateProcessedContent();
-    }
-  }
-
-  Future<void> _updateProcessedContent() async {
-    if (_isProcessing) return;
-    _isProcessing = true;
-
-    try {
-      final content = widget.isStreaming ? widget.streamedContent : widget.message.content;
-      
-      if (content.isEmpty) {
-        setState(() {
-          _processedContent = '';
-          _isProcessing = false;
-        });
-        return;
-      }
-
-      // Skip processing for streaming content that contains JSON chunks
-      if (widget.isStreaming && (content.trim().startsWith('{') || content.trim().startsWith('['))) {
-        setState(() {
-          _processedContent = content;
-          _isProcessing = false;
-        });
-        return;
-      }
-
-      // Process content in a separate isolate to avoid UI blocking
-      final processed = await compute<String, String>(_processContent, content);
-      
-      if (mounted) {
-        setState(() {
-          _processedContent = processed;
-          _isProcessing = false;
-        });
-      }
-    } catch (e) {
-      debugPrint('Error processing content: $e');
-      // Fallback to raw content if processing fails
-      if (mounted) {
-        setState(() {
-          _processedContent = widget.isStreaming ? widget.streamedContent : widget.message.content;
-          _isProcessing = false;
-        });
-      }
-    }
   }
 
   @override
@@ -135,7 +92,6 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Code header
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             decoration: BoxDecoration(
@@ -168,7 +124,6 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
               ],
             ),
           ),
-          // Code content with syntax highlighting
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             color: isDark ? const Color(0xFF282C34) : const Color(0xFFFAFAFA),
@@ -191,13 +146,72 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
     );
   }
 
+  Widget _buildTypingIndicator(ThemeData theme) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: List.generate(3, (index) {
+          return Container(
+            width: 8,
+            height: 8,
+            margin: const EdgeInsets.symmetric(horizontal: 2),
+            decoration: BoxDecoration(
+              gradient: context.read<ThemeProvider>().primaryGradient,
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0.0, end: 1.0),
+              duration: Duration(milliseconds: 600 + (index * 200)),
+              curve: Curves.easeInOut,
+              builder: (context, value, child) {
+                return Transform.scale(
+                  scale: 0.5 + (value * 0.5),
+                  child: Container(),
+                );
+              },
+            ),
+          );
+        }),
+      ),
+    );
+  }
+
+  Widget _buildAvatar(ThemeData theme) {
+    return Container(
+      width: 36,
+      height: 36,
+      decoration: BoxDecoration(
+        gradient: widget.message.isUser
+            ? context.read<ThemeProvider>().primaryGradient
+            : context.read<ThemeProvider>().secondaryGradient,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: theme.colorScheme.primary.withOpacity(0.2),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Center(
+        child: Icon(
+          widget.message.isUser
+              ? Icons.person_rounded
+              : Icons.smart_toy_rounded,
+          color: Colors.white,
+          size: 20,
+        ),
+      ),
+    );
+  }
+
   Widget _buildMessageContent(ThemeData theme) {
-    final content = widget.isStreaming ? widget.streamedContent : widget.message.content;
     final isDark = theme.brightness == Brightness.dark;
     
     if (widget.message.isUser) {
       return SelectableText(
-        content,
+        widget.message.content,
         style: theme.textTheme.bodyLarge!.copyWith(
           color: isDark 
               ? Colors.white
@@ -214,29 +228,81 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
       );
     }
 
+    // For assistant messages, preserve XML tags by wrapping them in code blocks
+    String content = widget.isStreaming ? widget.streamedContent : widget.message.content;
+    
+    // Replace XML tags with code-wrapped versions
+    content = content.replaceAllMapped(
+      RegExp(r'<[^>]+>'),
+      (match) => '`${match.group(0)}`'
+    );
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         MarkdownBody(
-          data: _processedContent.isEmpty ? content : _processedContent,
+          data: content,
           selectable: true,
           softLineBreak: true,
+          styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
+            textScaleFactor: 1.0,
+            blockSpacing: 16,
+            listIndent: 24,
+            a: theme.textTheme.bodyLarge!.copyWith(color: isDark ? Colors.white : null),
+            p: theme.textTheme.bodyLarge!.copyWith(color: isDark ? Colors.white : null),
+            code: theme.textTheme.bodyMedium!.copyWith(color: isDark ? Colors.white : null),
+            h1: theme.textTheme.headlineMedium!.copyWith(color: isDark ? Colors.white : null),
+            h2: theme.textTheme.headlineSmall!.copyWith(color: isDark ? Colors.white : null),
+            h3: theme.textTheme.titleLarge!.copyWith(color: isDark ? Colors.white : null),
+            h4: theme.textTheme.titleMedium!.copyWith(color: isDark ? Colors.white : null),
+            h5: theme.textTheme.titleSmall!.copyWith(color: isDark ? Colors.white : null),
+            h6: theme.textTheme.bodyLarge!.copyWith(color: isDark ? Colors.white : null),
+            em: theme.textTheme.bodyLarge!.copyWith(
+              color: isDark ? Colors.white : null,
+              fontStyle: FontStyle.italic,
+            ),
+            strong: theme.textTheme.bodyLarge!.copyWith(
+              color: isDark ? Colors.white : null,
+              fontWeight: FontWeight.bold,
+            ),
+            del: theme.textTheme.bodyLarge!.copyWith(
+              color: isDark ? Colors.white : null,
+              decoration: TextDecoration.lineThrough,
+            ),
+            listBullet: theme.textTheme.bodyLarge!.copyWith(color: isDark ? Colors.white : null),
+          ),
           builders: {
             'code': CodeElementBuilder(
               theme,
               context,
               customBuilder: (String text, String? language, bool isInline) {
                 if (isInline) {
+                  // For XML tags, use a more subtle style
+                  if (text.startsWith('<') && text.endsWith('>')) {
+                    return Text.rich(
+                      TextSpan(
+                        text: text,
+                        style: theme.textTheme.bodyLarge!.copyWith(
+                          color: isDark
+                              ? Colors.white.withOpacity(0.9)
+                              : theme.colorScheme.onSurface.withOpacity(0.9),
+                          height: 1.5,
+                        ),
+                      ),
+                      softWrap: true,
+                    );
+                  }
+                  // For other inline code
                   return Text.rich(
                     TextSpan(
                       text: text.trim(),
                       style: GoogleFonts.firaCode(
                         fontSize: theme.textTheme.bodyMedium!.fontSize,
                         color: isDark
-                            ? theme.colorScheme.primary.lighten(0.1)
+                            ? Colors.white.withOpacity(0.9)
                             : theme.colorScheme.primary,
                         backgroundColor: isDark
-                            ? Colors.white.withOpacity(0.15)
+                            ? Colors.black.withOpacity(0.3)
                             : Colors.black.withOpacity(0.05),
                         height: 1.5,
                         letterSpacing: 0,
@@ -249,71 +315,6 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
               },
             ),
           },
-          styleSheet: MarkdownStyleSheet(
-            p: theme.textTheme.bodyLarge!.copyWith(
-              color: isDark
-                  ? Colors.white.withOpacity(0.95)
-                  : theme.colorScheme.onSurface,
-              height: 1.5,
-            ),
-            code: theme.textTheme.bodyMedium!.copyWith(
-              fontFamily: GoogleFonts.firaCode().fontFamily,
-              color: theme.colorScheme.primary,
-              height: 1.5,
-              letterSpacing: 0,
-            ),
-            codeblockPadding: EdgeInsets.zero,
-            codeblockDecoration: const BoxDecoration(),
-            blockSpacing: 16,
-            h1Padding: EdgeInsets.zero,
-            h2Padding: EdgeInsets.zero,
-            h3Padding: EdgeInsets.zero,
-            h4Padding: EdgeInsets.zero,
-            h5Padding: EdgeInsets.zero,
-            h6Padding: EdgeInsets.zero,
-            listIndent: 24,
-            blockquote: theme.textTheme.bodyLarge!.copyWith(
-              color: theme.colorScheme.onSurface.withOpacity(0.8),
-              height: 1.5,
-            ),
-            blockquoteDecoration: BoxDecoration(
-              border: Border(
-                left: BorderSide(
-                  color: theme.colorScheme.primary.withOpacity(0.5),
-                  width: 4,
-                ),
-              ),
-              color: theme.colorScheme.surface,
-              borderRadius: BorderRadius.circular(4),
-            ),
-            blockquotePadding: const EdgeInsets.all(16),
-            listBullet: theme.textTheme.bodyLarge!.copyWith(
-              color: theme.colorScheme.onSurface,
-            ),
-            textScaleFactor: MediaQuery.textScaleFactorOf(context),
-            textAlign: WrapAlignment.start,
-            h1: theme.textTheme.headlineMedium!.copyWith(
-              color: theme.colorScheme.onSurface,
-            ),
-            h2: theme.textTheme.headlineSmall!.copyWith(
-              color: theme.colorScheme.onSurface,
-            ),
-            h3: theme.textTheme.titleLarge!.copyWith(
-              color: theme.colorScheme.onSurface,
-            ),
-            h4: theme.textTheme.titleMedium!.copyWith(
-              color: theme.colorScheme.onSurface,
-            ),
-            h5: theme.textTheme.titleSmall!.copyWith(
-              color: theme.colorScheme.onSurface,
-            ),
-            h6: theme.textTheme.bodyLarge!.copyWith(
-              color: theme.colorScheme.onSurface,
-            ),
-            em: const TextStyle(fontStyle: FontStyle.italic),
-            strong: const TextStyle(fontWeight: FontWeight.bold),
-            del: const TextStyle(decoration: TextDecoration.lineThrough),
-          ),
         ),
         if (widget.isStreaming) _buildTypingIndicator(theme),
       ],
@@ -323,7 +324,6 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final themeProvider = context.watch<ThemeProvider>();
     final isUser = widget.message.isUser;
     final isDark = theme.brightness == Brightness.dark;
 
@@ -427,96 +427,6 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
       },
     );
   }
-
-  Widget _buildAvatar(ThemeData theme) {
-    return Container(
-      width: 36,
-      height: 36,
-      decoration: BoxDecoration(
-        gradient: widget.message.isUser
-            ? context.read<ThemeProvider>().primaryGradient
-            : context.read<ThemeProvider>().secondaryGradient,
-        borderRadius: BorderRadius.circular(18),
-        boxShadow: [
-          BoxShadow(
-            color: theme.colorScheme.primary.withOpacity(0.2),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Center(
-        child: Icon(
-          widget.message.isUser
-              ? Icons.person_rounded
-              : Icons.smart_toy_rounded,
-          color: Colors.white,
-          size: 20,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTypingIndicator(ThemeData theme) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: List.generate(3, (index) {
-        return Container(
-          width: 8,
-          height: 8,
-          margin: const EdgeInsets.symmetric(horizontal: 2),
-          decoration: BoxDecoration(
-            gradient: context.read<ThemeProvider>().primaryGradient,
-            borderRadius: BorderRadius.circular(4),
-          ),
-          child: TweenAnimationBuilder<double>(
-            tween: Tween(begin: 0.0, end: 1.0),
-            duration: Duration(milliseconds: 600 + (index * 200)),
-            curve: Curves.easeInOut,
-            builder: (context, value, child) {
-              return Transform.scale(
-                scale: 0.5 + (value * 0.5),
-                child: Container(),
-              );
-            },
-          ),
-        );
-      }),
-    );
-  }
-}
-
-// Isolate-compatible content processor
-String _processContent(String content) {
-  final lines = content.split('\n');
-  final processedLines = <String>[];
-  bool insideCodeBlock = false;
-
-  for (var line in lines) {
-    if (line.startsWith('```')) {
-      insideCodeBlock = !insideCodeBlock;
-      processedLines.add(line);
-    } else if (insideCodeBlock) {
-      processedLines.add(line.trimRight());
-    } else {
-      // For non-code-block lines, ensure proper spacing around inline code
-      processedLines.add(line.replaceAllMapped(
-        RegExp(r'(\s*)`([^`]+)`(\s*)'),
-        (match) {
-          final beforeSpace = match[1] ?? '';
-          final code = match[2] ?? '';
-          final afterSpace = match[3] ?? '';
-          return '${beforeSpace.isEmpty ? '' : ' '}`${code.trim()}`${afterSpace.isEmpty ? ' ' : afterSpace}';
-        }
-      ));
-    }
-  }
-
-  if (insideCodeBlock) {
-    processedLines.add('```');
-  }
-
-  return processedLines.join('\n');
 }
 
 class CodeElementBuilder extends MarkdownElementBuilder {
@@ -570,16 +480,24 @@ class CodeElementBuilder extends MarkdownElementBuilder {
   }
 }
 
-extension ColorExtension on Color {
-  Color darken([double amount = 0.1]) {
-    assert(amount >= 0 && amount <= 1);
-    final hsl = HSLColor.fromColor(this);
-    return hsl.withLightness((hsl.lightness - amount).clamp(0.0, 1.0)).toColor();
+// Simplify content processor to only handle code blocks
+String _processContent(String content) {
+  final lines = content.split('\n');
+  final processedLines = <String>[];
+  bool insideCodeBlock = false;
+
+  for (var line in lines) {
+    if (line.startsWith('```')) {
+      insideCodeBlock = !insideCodeBlock;
+    }
+    // Preserve all content exactly as is
+    processedLines.add(line);
   }
 
-  Color lighten([double amount = 0.1]) {
-    assert(amount >= 0 && amount <= 1);
-    final hsl = HSLColor.fromColor(this);
-    return hsl.withLightness((hsl.lightness + amount).clamp(0.0, 1.0)).toColor();
+  // Ensure code blocks are properly closed
+  if (insideCodeBlock) {
+    processedLines.add('```');
   }
+
+  return processedLines.join('\n');
 } 

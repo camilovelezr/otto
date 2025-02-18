@@ -79,7 +79,6 @@ class ChatService {
 
   Stream<String> streamChat(String model, List<ChatMessage> messages) async* {
     final url = Uri.parse('$_baseUrl/chat/$model/generate?stream=true');
-    debugPrint('Streaming chat to URL: $url');
     
     final request = http.Request('POST', url)
       ..headers['Content-Type'] = 'application/json'
@@ -94,22 +93,24 @@ class ChatService {
       final response = await _client.send(request);
       
       if (response.statusCode != 200) {
-        debugPrint('Stream chat error status: ${response.statusCode}');
         throw Exception('Failed to get chat response: ${response.statusCode}');
       }
 
-      await for (final chunk in response.stream.transform(utf8.decoder).transform(const LineSplitter())) {
-        if (chunk.trim().isEmpty) continue;
-        
-        try {
-          debugPrint('Received chunk: $chunk');
-          final data = json.decode(chunk);
-          if (data['delta'] != null) {
-            yield data['delta'];
+      await for (final chunk in response.stream.transform(utf8.decoder)) {
+        final lines = chunk.split('\n');
+        for (final line in lines) {
+          if (line.trim().isEmpty) continue;
+          
+          try {
+            final data = json.decode(line);
+            if (data['delta'] != null) {
+              yield data['delta'].toString();
+            }
+          } catch (e) {
+            if (line.isNotEmpty) {
+              yield line;
+            }
           }
-        } catch (e) {
-          debugPrint('Error processing chunk: $e');
-          rethrow;
         }
       }
     } catch (e) {

@@ -24,6 +24,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   static const String _sidePanelKey = 'side_panel_expanded';
   late AnimationController _shimmerController;
   bool _isUserScroll = true;
+  bool _showScrollToBottom = false;
 
   @override
   void initState() {
@@ -40,8 +41,25 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   }
 
   void _handleScroll() {
-    // Only used for autoscroll detection now
-    if (!_scrollController.hasClients || !_isUserScroll) return;
+    if (!_scrollController.hasClients) return;
+    
+    // Check if user has scrolled up
+    final position = _scrollController.position;
+    final showButton = position.pixels < position.maxScrollExtent - 100;
+    
+    if (showButton != _showScrollToBottom) {
+      setState(() {
+        _showScrollToBottom = showButton;
+      });
+    }
+
+    // Check if we're at the bottom (with a smaller threshold)
+    final isAtBottom = position.pixels >= position.maxScrollExtent - 20;
+    if (isAtBottom != !_isUserScroll) {
+      setState(() {
+        _isUserScroll = !isAtBottom;
+      });
+    }
   }
 
   @override
@@ -79,34 +97,12 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   void _scrollToBottom() {
     if (!_scrollController.hasClients) return;
     
-    _isUserScroll = false;
+    final position = _scrollController.position;
+    final target = position.maxScrollExtent + 
+                  MediaQuery.of(context).padding.bottom;
     
-    // Ensure we're getting the latest content height and wait for layout
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      // Wait for another frame to ensure all content is properly laid out
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted || !_scrollController.hasClients) return;
-        
-        final position = _scrollController.position;
-        // Calculate the actual bottom position including any padding
-        final target = position.maxScrollExtent + 
-                      MediaQuery.of(context).padding.bottom +
-                      kToolbarHeight; // Add extra space to ensure copy button is visible
-        
-        _scrollController.animateTo(
-          target,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOutCubic,
-        ).then((_) {
-          // Add a small delay before re-enabling user scroll
-          Future.delayed(const Duration(milliseconds: 150), () {
-            if (mounted) {
-              _isUserScroll = true;
-            }
-          });
-        });
-      });
-    });
+    // Always jump to bottom during streaming for smooth experience
+    _scrollController.jumpTo(target);
   }
 
   Widget _buildHeader(BuildContext context, ThemeData theme, ChatProvider chatProvider) {
@@ -239,8 +235,17 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final messages = chatProvider.messages;
     final topPadding = MediaQuery.of(context).padding.top;
 
+    // Auto-scroll logic
     if (chatProvider.isLoading) {
-      _scrollToBottom();
+      if (chatProvider.currentStreamedResponse.isEmpty) {
+        // Immediate scroll when message is first sent
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _scrollToBottom();
+        });
+      } else if (!_isUserScroll) {
+        // Smooth scroll during streaming
+        _scrollToBottom();
+      }
     }
 
     return Scaffold(
@@ -263,25 +268,98 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                         ),
                         child: messages.isEmpty
                             ? _buildEmptyState(theme)
-                            : ListView.builder(
-                                controller: _scrollController,
-                                padding: EdgeInsets.only(
-                                  bottom: 20 + MediaQuery.of(context).padding.bottom,
-                                ),
-                                physics: const AlwaysScrollableScrollPhysics(),
-                                itemCount: messages.length,
-                                itemBuilder: (context, index) {
-                                  final message = messages[index];
-                                  final isLastMessage = index == messages.length - 1;
-                                  final isStreaming = isLastMessage && chatProvider.isLoading;
+                            : Stack(
+                                children: [
+                                  ListView.builder(
+                                    controller: _scrollController,
+                                    padding: EdgeInsets.only(
+                                      bottom: 20 + MediaQuery.of(context).padding.bottom,
+                                    ),
+                                    physics: const AlwaysScrollableScrollPhysics(),
+                                    itemCount: messages.length,
+                                    itemBuilder: (context, index) {
+                                      final message = messages[index];
+                                      final isLastMessage = index == messages.length - 1;
+                                      final isStreaming = isLastMessage && chatProvider.isLoading;
 
-                                  return ChatMessageWidget(
-                                    key: ValueKey(message.id),
-                                    message: message,
-                                    isStreaming: isStreaming,
-                                    streamedContent: chatProvider.currentStreamedResponse,
-                                  );
-                                },
+                                      return ChatMessageWidget(
+                                        key: ValueKey(message.id),
+                                        message: message,
+                                        isStreaming: isStreaming,
+                                        streamedContent: chatProvider.currentStreamedResponse,
+                                      );
+                                    },
+                                  ),
+                                  if (_showScrollToBottom)
+                                    Positioned(
+                                      right: 16,
+                                      bottom: 16,
+                                      child: AnimatedScale(
+                                        scale: _showScrollToBottom ? 1.0 : 0.0,
+                                        duration: const Duration(milliseconds: 200),
+                                        curve: Curves.easeOutCubic,
+                                        child: Container(
+                                          decoration: BoxDecoration(
+                                            gradient: LinearGradient(
+                                              begin: Alignment.topLeft,
+                                              end: Alignment.bottomRight,
+                                              colors: [
+                                                theme.colorScheme.primary,
+                                                Color.lerp(
+                                                  theme.colorScheme.primary,
+                                                  theme.colorScheme.secondary,
+                                                  0.3,
+                                                )!,
+                                              ],
+                                            ),
+                                            borderRadius: BorderRadius.circular(24),
+                                            boxShadow: [
+                                              BoxShadow(
+                                                color: theme.colorScheme.primary.withOpacity(0.15),
+                                                blurRadius: 8,
+                                                offset: const Offset(0, 2),
+                                                spreadRadius: 0,
+                                              ),
+                                            ],
+                                          ),
+                                          child: Material(
+                                            color: Colors.transparent,
+                                            child: InkWell(
+                                              onTap: () {
+                                                HapticFeedback.lightImpact();
+                                                _scrollToBottom();
+                                              },
+                                              borderRadius: BorderRadius.circular(24),
+                                              child: Container(
+                                                padding: const EdgeInsets.symmetric(
+                                                  horizontal: 16,
+                                                  vertical: 12,
+                                                ),
+                                                child: Row(
+                                                  mainAxisSize: MainAxisSize.min,
+                                                  children: [
+                                                    const Icon(
+                                                      Icons.arrow_downward_rounded,
+                                                      color: Colors.white,
+                                                      size: 20,
+                                                    ),
+                                                    const SizedBox(width: 8),
+                                                    Text(
+                                                      'Scroll to Bottom',
+                                                      style: theme.textTheme.labelLarge?.copyWith(
+                                                        color: Colors.white,
+                                                        fontWeight: FontWeight.w500,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                ],
                               ),
                       ),
                     ),

@@ -44,10 +44,16 @@ class _MessageInputState extends State<MessageInput> {
 
     widget.onSubmit(text);
     _controller.clear();
+    // Reset to single line after clearing
+    setState(() {});
     
     // Delay focus request to ensure proper state update
     Future.delayed(const Duration(milliseconds: 100), () {
-      if (mounted) _focusNode.requestFocus();
+      if (mounted) {
+        _focusNode.requestFocus();
+        // Ensure the text field is empty and reset
+        _controller.value = TextEditingValue.empty;
+      }
     });
   }
 
@@ -68,42 +74,66 @@ class _MessageInputState extends State<MessageInput> {
                 cursorColor: theme.colorScheme.primary,
                 selectionHandleColor: theme.colorScheme.primary,
               ),
-              child: TextField(
-                controller: _controller,
-                focusNode: _focusNode,
-                maxLines: 1,
-                textInputAction: TextInputAction.send,
-                onSubmitted: (_) => _handleSubmit(),
-                autofocus: false,
-                cursorWidth: 2.5,
-                cursorRadius: const Radius.circular(2),
-                cursorHeight: 20,
-                cursorColor: theme.colorScheme.primary.withOpacity(0.8),
-                style: theme.textTheme.bodyLarge?.copyWith(
-                  height: 1.5,
-                ),
-                decoration: InputDecoration(
-                  hintText: 'Type a message...',
-                  hintStyle: TextStyle(
-                    color: theme.colorScheme.onSurface.withOpacity(0.5),
+              child: KeyboardListener(
+                focusNode: FocusNode(),
+                onKeyEvent: (event) {
+                  if (event is KeyDownEvent) {
+                    final bool isEnterPressed = event.logicalKey == LogicalKeyboardKey.enter;
+                    final bool isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
+
+                    if (isEnterPressed && !isShiftPressed) {
+                      _handleSubmit();
+                    }
+                  }
+                },
+                child: TextField(
+                  controller: _controller,
+                  focusNode: _focusNode,
+                  maxLines: 6,
+                  minLines: 1,
+                  textInputAction: TextInputAction.newline,
+                  onSubmitted: (_) => _handleSubmit(),
+                  onChanged: (text) {
+                    // Only rebuild if text is not empty (avoid empty line height)
+                    if (text.isNotEmpty) {
+                      setState(() {});
+                    }
+                  },
+                  onEditingComplete: () {
+                    // Prevent default Enter behavior
+                  },
+                  keyboardType: TextInputType.multiline,
+                  onTapOutside: (event) => _focusNode.unfocus(),
+                  autofocus: false,
+                  cursorWidth: 2.5,
+                  cursorRadius: const Radius.circular(2),
+                  cursorHeight: 20,
+                  cursorColor: theme.colorScheme.primary.withOpacity(0.8),
+                  style: theme.textTheme.bodyLarge?.copyWith(
+                    height: 1.5,
                   ),
-                  filled: true,
-                  fillColor: Colors.transparent,
-                  border: InputBorder.none,
-                  enabledBorder: InputBorder.none,
-                  focusedBorder: InputBorder.none,
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
+                  decoration: InputDecoration(
+                    hintText: 'Type a message...',
+                    hintStyle: TextStyle(
+                      color: theme.colorScheme.onSurface.withOpacity(0.5),
+                    ),
+                    filled: true,
+                    fillColor: Colors.transparent,
+                    border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                    isDense: true,
+                    focusColor: Colors.transparent,
+                    hoverColor: Colors.transparent,
                   ),
-                  isDense: true,
-                  focusColor: Colors.transparent,
-                  hoverColor: Colors.transparent,
+                  showCursor: true,
+                  mouseCursor: SystemMouseCursors.text,
+                  enableInteractiveSelection: true,
                 ),
-                showCursor: true,
-                mouseCursor: SystemMouseCursors.text,
-                keyboardType: TextInputType.text,
-                enableInteractiveSelection: true,
               ),
             ),
           ),

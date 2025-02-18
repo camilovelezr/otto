@@ -142,29 +142,48 @@ class ChatProvider with ChangeNotifier {
     notifyListeners();
 
     try {
+      StringBuffer accumulatedContent = StringBuffer();
+      
       await for (final chunk in _chatService.streamChat(
         _selectedModel!.name,
         _messages,
       )) {
-        _currentStreamedResponse += chunk;
-        // Update the message with the current accumulated content
-        _messages[_messages.length - 1] = ChatMessage(
+        // Add the chunk to accumulated content
+        accumulatedContent.write(chunk);
+        _currentStreamedResponse = accumulatedContent.toString();
+        
+        // Update the message with the accumulated content
+        final updatedMessage = ChatMessage(
           role: 'assistant',
-          content: _currentStreamedResponse,  // Use accumulated content
+          content: _currentStreamedResponse,
           id: tempMessage.id,
           timestamp: tempMessage.timestamp,
           model: _selectedModel,
         );
+        
+        // Update the message in the list and notify listeners immediately
+        _messages[_messages.length - 1] = updatedMessage;
         notifyListeners();
       }
-      // After streaming is complete, the message already has the full content
+      
+      // Ensure final state is reflected
+      final finalMessage = ChatMessage(
+        role: 'assistant',
+        content: _currentStreamedResponse,
+        id: tempMessage.id,
+        timestamp: tempMessage.timestamp,
+        model: _selectedModel,
+      );
+      _messages[_messages.length - 1] = finalMessage;
+      notifyListeners();
     } catch (e) {
       _error = 'Failed to get response: ${e.toString()}';
+      debugPrint('Error in sendMessage: $e');
       // Remove the temporary message if we failed to get a response
       if (_messages.isNotEmpty) {
         _messages.removeLast();
       }
-      debugPrint('Error in sendMessage: $e');
+      notifyListeners();
     } finally {
       _isLoading = false;
       _currentStreamedResponse = '';
