@@ -270,17 +270,133 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
             minHeight: 24.0,
             maxWidth: constraints.maxWidth,
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ...MarkdownContentBuilder(theme, isDark).buildContent(content),
-              if (widget.isStreaming) 
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: _buildTypingIndicator(theme),
+          child: SelectableText.rich(
+            TextSpan(
+              children: [
+                WidgetSpan(
+                  child: MarkdownBody(
+                    data: content,
+                    selectable: true,
+                    softLineBreak: true,
+                    fitContent: true,
+                    shrinkWrap: true,
+                    styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
+                      h1Padding: EdgeInsets.zero,
+                      h2Padding: EdgeInsets.zero,
+                      h3Padding: EdgeInsets.zero,
+                      h4Padding: EdgeInsets.zero,
+                      h5Padding: EdgeInsets.zero,
+                      h6Padding: EdgeInsets.zero,
+                      pPadding: EdgeInsets.zero,
+                      listIndent: 24,
+                      blockSpacing: 8,
+                      codeblockPadding: EdgeInsets.zero,
+                      textScaleFactor: 1.0,
+                      a: theme.textTheme.bodyLarge!.copyWith(color: isDark ? Colors.white : null),
+                      p: theme.textTheme.bodyLarge!.copyWith(
+                        color: isDark ? Colors.white : null,
+                        height: 1.5,
+                        leadingDistribution: TextLeadingDistribution.even,
+                      ),
+                      code: theme.textTheme.bodyMedium!.copyWith(
+                        color: isDark ? Colors.white : null,
+                        height: 1.5,
+                        leadingDistribution: TextLeadingDistribution.even,
+                      ),
+                      h1: theme.textTheme.headlineMedium!.copyWith(
+                        color: isDark ? Colors.white : null,
+                        height: 1.5,
+                      ),
+                      h2: theme.textTheme.headlineSmall!.copyWith(
+                        color: isDark ? Colors.white : null,
+                        height: 1.5,
+                      ),
+                      h3: theme.textTheme.titleLarge!.copyWith(
+                        color: isDark ? Colors.white : null,
+                        height: 1.5,
+                      ),
+                      h4: theme.textTheme.titleMedium!.copyWith(
+                        color: isDark ? Colors.white : null,
+                        height: 1.5,
+                      ),
+                      h5: theme.textTheme.titleSmall!.copyWith(
+                        color: isDark ? Colors.white : null,
+                        height: 1.5,
+                      ),
+                      h6: theme.textTheme.bodyLarge!.copyWith(
+                        color: isDark ? Colors.white : null,
+                        height: 1.5,
+                      ),
+                      em: theme.textTheme.bodyLarge!.copyWith(
+                        color: isDark ? Colors.white : null,
+                        fontStyle: FontStyle.italic,
+                        height: 1.5,
+                      ),
+                      strong: theme.textTheme.bodyLarge!.copyWith(
+                        color: isDark ? Colors.white : null,
+                        fontWeight: FontWeight.bold,
+                        height: 1.5,
+                      ),
+                      del: theme.textTheme.bodyLarge!.copyWith(
+                        color: isDark ? Colors.white : null,
+                        decoration: TextDecoration.lineThrough,
+                        height: 1.5,
+                      ),
+                      listBullet: theme.textTheme.bodyLarge!.copyWith(
+                        color: isDark ? Colors.white : null,
+                        height: 1.5,
+                      ),
+                    ),
+                    builders: {
+                      'code': CodeElementBuilder(
+                        theme,
+                        context,
+                        customBuilder: (String text, String? language, bool isInline) {
+                          if (isInline) {
+                            // For XML tags, use a more subtle style
+                            if (text.startsWith('<') && text.endsWith('>')) {
+                              return SelectableText.rich(
+                                TextSpan(
+                                  text: text,
+                                  style: theme.textTheme.bodyLarge!.copyWith(
+                                    color: isDark
+                                        ? Colors.white.withOpacity(0.9)
+                                        : theme.colorScheme.onSurface.withOpacity(0.9),
+                                    height: 1.5,
+                                  ),
+                                ),
+                              );
+                            }
+                            // For other inline code
+                            return SelectableText.rich(
+                              TextSpan(
+                                text: text.trim(),
+                                style: GoogleFonts.firaCode(
+                                  fontSize: theme.textTheme.bodyMedium!.fontSize,
+                                  color: isDark
+                                      ? Colors.white.withOpacity(0.9)
+                                      : theme.colorScheme.primary,
+                                  backgroundColor: isDark
+                                      ? Colors.black.withOpacity(0.3)
+                                      : Colors.black.withOpacity(0.05),
+                                  height: 1.5,
+                                  letterSpacing: 0,
+                                ),
+                              ),
+                            );
+                          }
+                          return _buildCodeBlock(theme, text, language);
+                        },
+                      ),
+                    },
+                  ),
                 ),
-            ],
+              ],
+            ),
+            style: theme.textTheme.bodyLarge!.copyWith(
+              color: isDark ? Colors.white : theme.colorScheme.onSurface,
+              height: 1.5,
+            ),
           ),
         );
       },
@@ -391,20 +507,6 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
   }
 }
 
-class CustomParagraphBuilder extends MarkdownElementBuilder {
-  final TextStyle? textStyle;
-
-  CustomParagraphBuilder({this.textStyle});
-
-  @override
-  Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) {
-    return SelectableText(
-      element.textContent,
-      style: textStyle ?? preferredStyle,
-    );
-  }
-}
-
 class CodeElementBuilder extends MarkdownElementBuilder {
   final ThemeData theme;
   final BuildContext context;
@@ -476,245 +578,4 @@ String _processContent(String content) {
   }
 
   return processedLines.join('\n');
-}
-
-class MarkdownContentBuilder {
-  final ThemeData theme;
-  final bool isDark;
-
-  MarkdownContentBuilder(this.theme, this.isDark);
-
-  Widget _buildCodeBlock(ThemeData theme, String code, String? language) {
-    final headerBgColor = isDark ? const Color(0xFF21252B) : const Color(0xFFF0F0F0);
-    final contentBgColor = isDark ? const Color(0xFF282C34) : const Color(0xFFFAFAFA);
-    
-    return Material(
-      color: contentBgColor,
-      borderRadius: BorderRadius.circular(8),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Material(
-            color: headerBgColor,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    language ?? 'plain text',
-                    style: theme.textTheme.bodySmall!.copyWith(
-                      color: isDark 
-                          ? const Color(0xFF9DA5B4)
-                          : const Color(0xFF383A42),
-                    ),
-                  ),
-                  MouseRegion(
-                    cursor: SystemMouseCursors.click,
-                    child: GestureDetector(
-                      onTap: () {
-                        final cleanCode = code.replaceAll(RegExp(r'\r\n|\r'), '\n')
-                                           .replaceAll(RegExp(r'\n\s*\n'), '\n\n');
-                        Clipboard.setData(ClipboardData(text: cleanCode));
-                      },
-                      child: Icon(
-                        Icons.content_copy_rounded,
-                        size: 18,
-                        color: isDark 
-                            ? const Color(0xFF9DA5B4)
-                            : const Color(0xFF383A42),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            child: Stack(
-              children: [
-                HighlightView(
-                  code.replaceAll(RegExp(r'\r\n|\r'), '\n')
-                      .replaceAll(RegExp(r'\n\s*\n'), '\n\n'),
-                  language: language ?? 'plaintext',
-                  theme: isDark ? atomOneDarkTheme : atomOneLightTheme,
-                  textStyle: GoogleFonts.firaCode(
-                    fontSize: 14,
-                    height: 1.5,
-                  ),
-                  padding: EdgeInsets.zero,
-                ),
-                Positioned.fill(
-                  child: SelectableText(
-                    code.replaceAll(RegExp(r'\r\n|\r'), '\n')
-                        .replaceAll(RegExp(r'\n\s*\n'), '\n\n'),
-                    style: GoogleFonts.firaCode(
-                      fontSize: 14,
-                      height: 1.5,
-                      color: Colors.transparent,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  List<Widget> buildContent(String content) {
-    final List<Widget> widgets = [];
-    final paragraphs = content.split(RegExp(r'\n{2,}'));
-
-    for (var paragraph in paragraphs) {
-      if (paragraph.trim().isEmpty) continue;
-
-      if (paragraph.startsWith('```')) {
-        // Handle code blocks
-        final match = RegExp(r'```(\w*)\n([\s\S]*?)```').firstMatch(paragraph);
-        if (match != null) {
-          final language = match.group(1) ?? '';
-          final code = match.group(2) ?? '';
-          widgets.add(_buildCodeBlock(theme, code.trim(), language));
-          widgets.add(const SizedBox(height: 8));
-          continue;
-        }
-      }
-
-      if (paragraph.startsWith('#')) {
-        // Handle headers
-        final level = paragraph.indexOf(' ');
-        if (level > 0 && level <= 6) {
-          final text = paragraph.substring(level + 1).trim();
-          widgets.add(_buildHeader(text, level));
-          widgets.add(const SizedBox(height: 8));
-          continue;
-        }
-      }
-
-      if (paragraph.trim().startsWith(RegExp(r'[-*+]'))) {
-        // Handle lists
-        final items = paragraph.split('\n');
-        widgets.add(_buildList(items));
-        widgets.add(const SizedBox(height: 8));
-        continue;
-      }
-
-      // Handle regular paragraphs and inline elements
-      widgets.add(_buildParagraph(paragraph));
-      widgets.add(const SizedBox(height: 8));
-    }
-
-    return widgets;
-  }
-
-  Widget _buildParagraph(String text) {
-    // Handle inline code and other inline elements
-    final spans = <InlineSpan>[];
-    final parts = text.split(RegExp(r'(`[^`]+`)|(<[^>]+>)'));
-    
-    for (var i = 0; i < parts.length; i++) {
-      if (parts[i].isEmpty) continue;
-
-      if (parts[i].startsWith('`') && parts[i].endsWith('`')) {
-        // Inline code
-        spans.add(TextSpan(
-          text: parts[i].substring(1, parts[i].length - 1),
-          style: GoogleFonts.firaCode(
-            fontSize: theme.textTheme.bodyMedium!.fontSize,
-            color: isDark ? Colors.white.withOpacity(0.9) : theme.colorScheme.primary,
-            backgroundColor: isDark ? Colors.black.withOpacity(0.3) : Colors.black.withOpacity(0.05),
-            height: 1.5,
-            letterSpacing: 0,
-          ),
-        ));
-      } else if (parts[i].startsWith('<') && parts[i].endsWith('>')) {
-        // XML tags
-        spans.add(TextSpan(
-          text: parts[i],
-          style: theme.textTheme.bodyLarge!.copyWith(
-            color: isDark ? Colors.white.withOpacity(0.9) : theme.colorScheme.onSurface.withOpacity(0.9),
-            height: 1.5,
-          ),
-        ));
-      } else {
-        // Regular text
-        spans.add(TextSpan(
-          text: parts[i],
-          style: theme.textTheme.bodyLarge!.copyWith(
-            color: isDark ? Colors.white : theme.colorScheme.onSurface,
-            height: 1.5,
-          ),
-        ));
-      }
-    }
-
-    return SelectableText.rich(
-      TextSpan(children: spans),
-    );
-  }
-
-  Widget _buildHeader(String text, int level) {
-    TextStyle style;
-    switch (level) {
-      case 1:
-        style = theme.textTheme.headlineMedium!;
-        break;
-      case 2:
-        style = theme.textTheme.headlineSmall!;
-        break;
-      case 3:
-        style = theme.textTheme.titleLarge!;
-        break;
-      default:
-        style = theme.textTheme.titleMedium!;
-    }
-
-    return SelectableText(
-      text,
-      style: style.copyWith(
-        color: isDark ? Colors.white : theme.colorScheme.onSurface,
-        height: 1.5,
-      ),
-    );
-  }
-
-  Widget _buildList(List<String> items) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: items.map((item) {
-        final match = RegExp(r'^(\s*[-*+])\s*(.+)$').firstMatch(item);
-        if (match == null) return const SizedBox.shrink();
-
-        return Padding(
-          padding: const EdgeInsets.only(left: 24),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '•',
-                style: theme.textTheme.bodyLarge!.copyWith(
-                  color: isDark ? Colors.white : theme.colorScheme.onSurface,
-                  height: 1.5,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: SelectableText(
-                  match.group(2)?.trim() ?? '',
-                  style: theme.textTheme.bodyLarge!.copyWith(
-                    color: isDark ? Colors.white : theme.colorScheme.onSurface,
-                    height: 1.5,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        );
-      }).toList(),
-    );
-  }
 } 
