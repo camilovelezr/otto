@@ -11,6 +11,10 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_highlight/flutter_highlight.dart';
 import 'package:flutter_highlight/themes/atom-one-dark.dart';
 import 'package:flutter_highlight/themes/atom-one-light.dart';
+import 'dart:math';
+import 'dart:ui' as ui;
+import 'package:flutter/cupertino.dart' show AdaptiveTextSelectionToolbar;
+import 'package:url_launcher/url_launcher.dart' as url_launcher;
 
 extension ColorExtension on Color {
   Color darken([double amount = 0.1]) {
@@ -23,6 +27,12 @@ extension ColorExtension on Color {
     assert(amount >= 0 && amount <= 1);
     final hsl = HSLColor.fromColor(this);
     return hsl.withLightness((hsl.lightness + amount).clamp(0.0, 1.0)).toColor();
+  }
+
+  Color adjustSaturation([double amount = 0.1]) {
+    assert(amount >= -1 && amount <= 1);
+    final hsl = HSLColor.fromColor(this);
+    return hsl.withSaturation((hsl.saturation + amount).clamp(0.0, 1.0)).toColor();
   }
 }
 
@@ -184,67 +194,32 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
     );
   }
 
-  /// Renders the main message content.
-  /// For non-user messages, markdown is rendered (which may include code blocks).
-  Widget _buildMessageContent(ThemeData theme) {
-    final isDark = theme.brightness == Brightness.dark;
-
-    if (widget.message.isUser) {
-      return SelectableText(
-        widget.message.content,
-        style: theme.textTheme.bodyLarge!.copyWith(
-          color: isDark ? Colors.white : theme.colorScheme.onSurface,
-          height: 1.5,
-          shadows: isDark
-              ? [
-                  const Shadow(
-                    color: Colors.black26,
-                    offset: Offset(0, 1),
-                    blurRadius: 2,
-                  ),
-                ]
-              : null,
-        ),
-      );
-    }
-
-    String content =
-        widget.isStreaming ? widget.streamedContent : widget.message.content;
-
-    // Wrap XML tags with inline code formatting.
-    content = content.replaceAllMapped(
-      RegExp(r'<[^>]+>'),
-      (match) => '`${match.group(0)}`',
-    );
-
-    content = content.replaceAll(RegExp(r'\r\n|\r'), '\n');
-    content = content.replaceAll(RegExp(r'\n{3,}'), '\n\n');
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        return Container(
-          constraints: BoxConstraints(
-            minHeight: 24.0,
-            maxWidth: constraints.maxWidth,
-          ),
-          child: SelectableMarkdown(
-            data: content,
-            isDark: isDark,
-            baseStyle: theme.textTheme.bodyLarge!.copyWith(
-              color: isDark ? Colors.white : theme.colorScheme.onSurface,
-              height: 1.5,
-            ),
-          ),
-        );
-      },
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isUser = widget.message.isUser;
     final isDark = theme.brightness == Brightness.dark;
+
+    // Helper function to create sophisticated dark mode gradients
+    List<Color> createDarkModeGradient(Color surface) {
+      final hsl = HSLColor.fromColor(surface);
+      return [
+        surface.darken(0.12).adjustSaturation(-0.08),
+        surface.darken(0.10).adjustSaturation(-0.07),
+        surface.darken(0.08).adjustSaturation(-0.06),
+        surface.darken(0.06).adjustSaturation(-0.05),
+        surface.darken(0.04).adjustSaturation(-0.04),
+        surface.darken(0.02).adjustSaturation(-0.03),
+        surface.adjustSaturation(-0.02),
+        surface,
+        surface.lighten(0.01).adjustSaturation(-0.01),
+        surface.lighten(0.02).adjustSaturation(-0.02),
+        surface.lighten(0.03).adjustSaturation(-0.03),
+        surface.lighten(0.04).adjustSaturation(-0.04),
+        surface.lighten(0.05).adjustSaturation(-0.05),
+        surface.lighten(0.06).adjustSaturation(-0.06),
+      ];
+    }
 
     // Build the message content.
     Widget content = AnimatedBuilder(
@@ -256,105 +231,201 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
             opacity: _opacityAnimation.value,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-              // Wrap the entire message in a GestureDetector to clear inner focus on tap.
               child: GestureDetector(
                 onTap: () {
                   FocusScope.of(context).unfocus();
                 },
-                child: Column(
-                  crossAxisAlignment: isUser
-                      ? CrossAxisAlignment.end
-                      : CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: isUser
-                          ? MainAxisAlignment.end
-                          : MainAxisAlignment.start,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Flexible(
-                          child: Container(
-                            constraints: BoxConstraints(
-                              maxWidth:
-                                  MediaQuery.of(context).size.width * 0.75,
-                            ),
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                                colors: isUser
-                                    ? [
-                                        (isDark
-                                            ? theme.colorScheme.primary
-                                                .withOpacity(0.25)
-                                            : theme.colorScheme.primary
-                                                .withOpacity(0.1)),
-                                        (isDark
-                                            ? theme.colorScheme.secondary
-                                                .withOpacity(0.2)
-                                            : theme.colorScheme.secondary
-                                                .withOpacity(0.1)),
-                                      ]
-                                    : [
-                                        (isDark
-                                            ? theme.colorScheme.surface.darken(0.1)
-                                            : theme.colorScheme.surface),
-                                        (isDark
-                                            ? theme.colorScheme.surface
-                                                .darken(0.05)
-                                                .withOpacity(0.9)
-                                            : theme.colorScheme.surface
-                                                .withOpacity(0.9)),
-                                      ],
+                // A single SelectableRegion at this level wraps all content
+                child: SelectableRegion(
+                  focusNode: FocusNode(),
+                  selectionControls: MaterialTextSelectionControls(),
+                  magnifierConfiguration: const TextMagnifierConfiguration(
+                    shouldDisplayHandlesInMagnifier: true,
+                  ),
+                  onSelectionChanged: (selection) {
+                    // This helps keep track of the current selection
+                    if (selection != null) {
+                      // Optional: Handle selection change if needed
+                    }
+                  },
+                  child: Column(
+                    crossAxisAlignment: isUser
+                        ? CrossAxisAlignment.end
+                        : CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: isUser
+                            ? MainAxisAlignment.end
+                            : MainAxisAlignment.start,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Flexible(
+                            child: Container(
+                              constraints: BoxConstraints(
+                                maxWidth:
+                                    MediaQuery.of(context).size.width * 0.75,
                               ),
-                              borderRadius: BorderRadius.only(
-                                topLeft: const Radius.circular(20),
-                                topRight: const Radius.circular(20),
-                                bottomLeft: Radius.circular(isUser ? 20 : 4),
-                                bottomRight: Radius.circular(isUser ? 4 : 20),
-                              ),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: isDark
-                                      ? theme.shadowColor.withOpacity(0.2)
-                                      : theme.shadowColor.withOpacity(0.1),
-                                  blurRadius: 8,
-                                  offset: const Offset(0, 2),
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                  colors: isUser
+                                      ? [
+                                          (isDark
+                                              ? theme.colorScheme.primary
+                                                  .withOpacity(0.25)
+                                              : theme.colorScheme.primary
+                                                  .withOpacity(0.1)),
+                                          (isDark
+                                              ? theme.colorScheme.secondary
+                                                  .withOpacity(0.2)
+                                              : theme.colorScheme.secondary
+                                                  .withOpacity(0.1)),
+                                        ]
+                                      : isDark
+                                          ? createDarkModeGradient(theme.colorScheme.surface)
+                                          : [
+                                              theme.colorScheme.surface,
+                                              theme.colorScheme.surface.withOpacity(0.9),
+                                            ],
+                                  stops: isUser
+                                      ? [0.0, 1.0]
+                                      : isDark
+                                          ? [0.0, 0.08, 0.16, 0.24, 0.32, 0.40, 0.48, 0.52, 0.60, 0.68, 0.76, 0.84, 0.92, 1.0]
+                                          : [0.0, 1.0],
+                                  tileMode: TileMode.clamp,
                                 ),
-                              ],
+                                borderRadius: BorderRadius.only(
+                                  topLeft: const Radius.circular(20),
+                                  topRight: const Radius.circular(20),
+                                  bottomLeft: Radius.circular(isUser ? 20 : 4),
+                                  bottomRight: Radius.circular(isUser ? 4 : 20),
+                                ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: isDark
+                                        ? Colors.black.withOpacity(0.2)
+                                        : theme.shadowColor.withOpacity(0.1),
+                                    blurRadius: 12,
+                                    offset: const Offset(0, 3),
+                                    spreadRadius: -2,
+                                  ),
+                                ],
+                              ),
+                              child: Stack(
+                                children: [
+                                  if (!isUser && isDark)
+                                    Positioned.fill(
+                                      child: ClipRRect(
+                                        borderRadius: BorderRadius.only(
+                                          topLeft: const Radius.circular(20),
+                                          topRight: const Radius.circular(20),
+                                          bottomLeft: Radius.circular(4),
+                                          bottomRight: Radius.circular(20),
+                                        ),
+                                        child: CustomPaint(
+                                          painter: NoisePainter(
+                                            color: Colors.white,
+                                            opacity: 0.01, // Reduced noise opacity
+                                            density: 40, // Increased noise density
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  Padding(
+                                    padding: const EdgeInsets.all(16),
+                                    child: Builder(
+                                      builder: (context) {
+                                        if (isUser) {
+                                          // User messages just get simple text
+                                          return Text(
+                                            widget.message.content,
+                                            style: theme.textTheme.bodyLarge!.copyWith(
+                                              color: isDark ? Colors.white : theme.colorScheme.onSurface,
+                                              height: 1.5,
+                                              shadows: isDark
+                                                  ? [
+                                                      const Shadow(
+                                                        color: Colors.black26,
+                                                        offset: Offset(0, 1),
+                                                        blurRadius: 2,
+                                                      ),
+                                                    ]
+                                                  : null,
+                                            ),
+                                          );
+                                        } else {
+                                          // For assistant messages, we use our enhanced SelectableMarkdown
+                                          String content = widget.isStreaming 
+                                              ? widget.streamedContent 
+                                              : widget.message.content;
+                                              
+                                          // Preprocess markdown content
+                                          content = content.replaceAllMapped(
+                                            RegExp(r'<[^>]+>'),
+                                            (match) => '`${match.group(0)}`',
+                                          );
+                                          
+                                          content = content.replaceAll(RegExp(r'\r\n|\r'), '\n');
+                                          content = content.replaceAll(RegExp(r'\n{3,}'), '\n\n');
+                                          
+                                          return SelectableMarkdown(
+                                            data: content,
+                                            isDark: isDark,
+                                            baseStyle: theme.textTheme.bodyLarge!.copyWith(
+                                              color: isDark ? Colors.white : theme.colorScheme.onSurface,
+                                              height: 1.5,
+                                            ),
+                                          );
+                                        }
+                                      }
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
-                            padding: const EdgeInsets.all(16),
-                            child: _buildMessageContent(theme),
                           ),
-                        ),
-                      ],
-                    ),
-                    if (!isUser && !widget.isStreaming)
-                      Padding(
-                        padding: const EdgeInsets.only(left: 8, top: 4),
-                        child: IconButton(
-                          icon: const Icon(
-                            Icons.content_copy_rounded,
-                            size: 20,
-                          ),
-                          onPressed: () {
-                            Clipboard.setData(
-                                ClipboardData(text: widget.message.content));
-                          },
-                          tooltip: 'Copy message',
-                          style: IconButton.styleFrom(
-                            backgroundColor: isDark
-                                ? theme.colorScheme.surface
-                                    .darken(0.1)
-                                    .withOpacity(0.8)
-                                : theme.colorScheme.surface.withOpacity(0.8),
-                            foregroundColor: theme.colorScheme.onSurface,
-                            padding: const EdgeInsets.all(8),
-                            minimumSize: const Size(32, 32),
-                          ),
-                        ),
+                        ],
                       ),
-                  ],
+                      if (!isUser && !widget.isStreaming)
+                        Padding(
+                          padding: const EdgeInsets.only(left: 8, top: 4),
+                          child: Tooltip(
+                            message: 'Copy entire message',
+                            child: IconButton(
+                              icon: const Icon(
+                                Icons.content_copy_rounded,
+                                size: 20,
+                              ),
+                              onPressed: () {
+                                Clipboard.setData(
+                                    ClipboardData(text: widget.message.content));
+                                // Show feedback to user
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: const Text('Message copied to clipboard'),
+                                    duration: const Duration(seconds: 2),
+                                    behavior: SnackBarBehavior.floating,
+                                    width: 240,
+                                  ),
+                                );
+                              },
+                              tooltip: 'Copy message',
+                              style: IconButton.styleFrom(
+                                backgroundColor: isDark
+                                    ? theme.colorScheme.surface
+                                        .darken(0.1)
+                                        .withOpacity(0.8)
+                                    : theme.colorScheme.surface.withOpacity(0.8),
+                                foregroundColor: theme.colorScheme.onSurface,
+                                padding: const EdgeInsets.all(8),
+                                minimumSize: const Size(32, 32),
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -363,7 +434,6 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
       },
     );
 
-    // Return the content directly without wrapping it in global Shortcuts/Actions.
     return content;
   }
 }
@@ -494,194 +564,165 @@ class SelectableMarkdown extends StatelessWidget {
     );
   }
 
-  Widget _buildCodeContent(
-      String code, String language, ThemeData theme) {
-    return CodeContentWidget(
-      code: code,
-      language: language,
-      theme: theme,
-      isDark: isDark,
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    List<InlineSpan> buildFormattedContent() {
-      final List<InlineSpan> spans = [];
-      final document = md.Document(
-        encodeHtml: false,
-        extensionSet: md.ExtensionSet.gitHubWeb,
-      );
-      final nodes = document.parse(data);
-
-      void processNode(md.Node node,
-          {TextStyle? currentStyle, int listLevel = 0}) {
-        if (node is md.Text) {
-          spans.add(TextSpan(
-            text: node.text,
-            style: currentStyle ?? baseStyle,
-          ));
-        } else if (node is md.Element) {
-          TextStyle? newStyle;
-          String? prefix;
-          String? suffix;
-          switch (node.tag) {
-            case 'h1':
-              newStyle = theme.textTheme.headlineMedium!.copyWith(
-                color: isDark ? Colors.white : theme.colorScheme.onSurface,
-                height: 1.5,
-              );
-              suffix = '\n\n';
-              break;
-            case 'h2':
-              newStyle = theme.textTheme.headlineSmall!.copyWith(
-                color: isDark ? Colors.white : theme.colorScheme.onSurface,
-                height: 1.5,
-              );
-              suffix = '\n\n';
-              break;
-            case 'h3':
-              newStyle = theme.textTheme.titleLarge!.copyWith(
-                color: isDark ? Colors.white : theme.colorScheme.onSurface,
-                height: 1.5,
-              );
-              suffix = '\n\n';
-              break;
-            case 'p':
-              if (node != nodes.last) {
-                suffix = '\n\n';
-              }
-              break;
-            case 'strong':
-              newStyle =
-                  (currentStyle ?? baseStyle)?.copyWith(fontWeight: FontWeight.bold);
-              break;
-            case 'em':
-              newStyle =
-                  (currentStyle ?? baseStyle)?.copyWith(fontStyle: FontStyle.italic);
-              break;
-            case 'code':
-              if (node.textContent.startsWith('<') &&
-                  node.textContent.endsWith('>')) {
-                newStyle = theme.textTheme.bodyLarge!.copyWith(
-                  color: isDark
-                      ? Colors.white.withOpacity(0.9)
-                      : theme.colorScheme.onSurface.withOpacity(0.9),
-                  height: 1.5,
-                );
-              } else {
-                newStyle = GoogleFonts.firaCode(
+    
+    // Use Flutter's built-in MarkdownBody for better rendering
+    return MarkdownBody(
+      data: data,
+      selectable: true,
+      softLineBreak: true,
+      onTapLink: (text, href, title) {
+        _handleLinkTap(context, href);
+      },
+      styleSheet: MarkdownStyleSheet(
+        p: baseStyle ?? theme.textTheme.bodyLarge!.copyWith(
+          color: isDark ? Colors.white : theme.colorScheme.onSurface,
+          height: 1.5,
+        ),
+        h1: theme.textTheme.headlineMedium!.copyWith(
+          color: isDark ? Colors.white : theme.colorScheme.onSurface,
+          height: 1.5,
+        ),
+        h2: theme.textTheme.headlineSmall!.copyWith(
+          color: isDark ? Colors.white : theme.colorScheme.onSurface,
+          height: 1.5,
+        ),
+        h3: theme.textTheme.titleLarge!.copyWith(
+          color: isDark ? Colors.white : theme.colorScheme.onSurface,
+          height: 1.5,
+        ),
+        h4: theme.textTheme.titleMedium!.copyWith(
+          color: isDark ? Colors.white : theme.colorScheme.onSurface,
+          height: 1.5,
+        ),
+        h5: theme.textTheme.titleSmall!.copyWith(
+          color: isDark ? Colors.white : theme.colorScheme.onSurface,
+          height: 1.5,
+        ),
+        h6: theme.textTheme.titleSmall!.copyWith(
+          color: isDark ? Colors.white : theme.colorScheme.onSurface,
+          height: 1.5,
+        ),
+        strong: baseStyle?.copyWith(
+          fontWeight: FontWeight.bold,
+        ) ?? theme.textTheme.bodyLarge!.copyWith(
+          color: isDark ? Colors.white : theme.colorScheme.onSurface,
+          fontWeight: FontWeight.bold,
+          height: 1.5,
+        ),
+        em: baseStyle?.copyWith(
+          fontStyle: FontStyle.italic,
+        ) ?? theme.textTheme.bodyLarge!.copyWith(
+          color: isDark ? Colors.white : theme.colorScheme.onSurface,
+          fontStyle: FontStyle.italic,
+          height: 1.5,
+        ),
+        code: GoogleFonts.firaCode(
+          fontSize: theme.textTheme.bodyMedium!.fontSize,
+          color: theme.colorScheme.primary,
+          backgroundColor: theme.colorScheme.surface.withOpacity(0.7),
+          height: 1.5,
+        ),
+        codeblockPadding: const EdgeInsets.all(0),
+        codeblockDecoration: BoxDecoration(
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(0),
+        ),
+        blockquote: theme.textTheme.bodyLarge!.copyWith(
+          color: isDark 
+              ? Colors.white70 
+              : theme.colorScheme.onSurface.withOpacity(0.8),
+          height: 1.5,
+        ),
+        blockquoteDecoration: BoxDecoration(
+          border: Border(
+            left: BorderSide(
+              color: isDark 
+                  ? Colors.white30 
+                  : theme.colorScheme.onSurface.withOpacity(0.3),
+              width: 4,
+            ),
+          ),
+        ),
+        blockquotePadding: const EdgeInsets.only(left: 16),
+      ),
+      builders: {
+        'code': CodeElementBuilder(theme, context, customBuilder: (code, language, isInline) {
+          if (isInline) {
+            return Text.rich(
+              TextSpan(
+                text: code,
+                style: GoogleFonts.firaCode(
                   fontSize: theme.textTheme.bodyMedium!.fontSize,
-                  color: isDark
-                      ? Colors.white.withOpacity(0.9)
-                      : theme.colorScheme.primary,
-                  backgroundColor: isDark
-                      ? Colors.black.withOpacity(0.3)
-                      : Colors.black.withOpacity(0.05),
+                  color: theme.colorScheme.primary,
+                  backgroundColor: theme.colorScheme.surface.withOpacity(0.7),
                   height: 1.5,
-                );
-              }
-              break;
-            case 'pre':
-              if (node.children?.first is md.Element &&
-                  (node.children?.first as md.Element).tag == 'code') {
-                final codeNode = node.children!.first as md.Element;
-                final language = codeNode.attributes['class']?.substring(9) ?? '';
-                final code = codeNode.textContent;
-                final contentBgColor = isDark
-                    ? const Color(0xFF282C34)
-                    : const Color(0xFFFAFAFA);
-                spans.add(WidgetSpan(
-                  child: Container(
-                    width: double.infinity,
-                    margin: const EdgeInsets.only(top: 4, bottom: 0),
-                    decoration: BoxDecoration(
-                      color: contentBgColor,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        _buildCodeBlockHeader(context, language, code),
-                        _buildCodeContent(code, language, theme),
-                      ],
-                    ),
+                  letterSpacing: 0,
+                ),
+              ),
+              softWrap: true,
+            );
+          } else {
+            // For code blocks, use our CodeContentWidget with syntax highlighting
+            return Container(
+              margin: const EdgeInsets.symmetric(vertical: 8),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _buildCodeBlockHeader(context, language ?? '', code),
+                  CodeContentWidget(
+                    code: code,
+                    language: language ?? 'plaintext',
+                    theme: theme,
+                    isDark: isDark,
                   ),
-                ));
-                spans.add(const TextSpan(text: '\n'));
-                return;
-              }
-              break;
-            case 'li':
-              final bullet = listLevel > 0
-                  ? '  ' * (listLevel - 1) + '• '
-                  : '• ';
-              prefix = bullet;
-              suffix = '\n';
-              break;
-            case 'ul':
-              for (final child in node.children!) {
-                processNode(child,
-                    currentStyle: currentStyle, listLevel: listLevel + 1);
-              }
-              if (listLevel == 0 && node != nodes.last) {
-                spans.add(TextSpan(text: '\n'));
-              }
-              return;
-            case 'ol':
-              int index = 1;
-              for (final child in node.children!) {
-                if (child is md.Element && child.tag == 'li') {
-                  spans.add(TextSpan(
-                    text: '  ' * listLevel + '$index. ',
-                    style: currentStyle ?? baseStyle,
-                  ));
-                  processNode(child,
-                      currentStyle: currentStyle, listLevel: listLevel + 1);
-                  index++;
-                }
-              }
-              if (listLevel == 0 && node != nodes.last) {
-                spans.add(TextSpan(text: '\n'));
-              }
-              return;
-            case 'a':
-              final url = node.attributes['href'] ?? '';
-              newStyle = (currentStyle ?? baseStyle)?.copyWith(
-                color: theme.colorScheme.primary,
-                decoration: TextDecoration.underline,
-              );
-              break;
+                ],
+              ),
+            );
           }
-          if (prefix != null) {
-            spans.add(TextSpan(
-              text: prefix,
-              style: currentStyle ?? baseStyle,
-            ));
-          }
-          for (final child in node.children!) {
-            processNode(child, currentStyle: newStyle ?? currentStyle);
-          }
-          if (suffix != null) {
-            spans.add(TextSpan(
-              text: suffix,
-              style: currentStyle ?? baseStyle,
-            ));
-          }
+        }),
+      },
+    );
+  }
+  
+  void _handleLinkTap(BuildContext context, String? href) async {
+    if (href == null || href.isEmpty) return;
+    
+    final Uri uri = Uri.parse(href);
+    
+    try {
+      final canLaunch = await url_launcher.canLaunchUrl(uri);
+      if (canLaunch) {
+        await url_launcher.launchUrl(uri, mode: url_launcher.LaunchMode.externalApplication);
+      } else {
+        // Show a snackbar if the URL can't be launched
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Could not open $href'),
+              duration: const Duration(seconds: 2),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
         }
       }
-      for (final node in nodes) {
-        processNode(node);
+    } catch (e) {
+      // Show error in snackbar
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error opening link: $e'),
+            duration: const Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
       }
-      return spans;
     }
-    return SelectableText.rich(
-      TextSpan(
-        children: buildFormattedContent(),
-      ),
-      style: baseStyle,
-    );
   }
 }
 
@@ -691,8 +732,8 @@ class SelectableMarkdown extends StatelessWidget {
 ///
 /// A simple widget that displays highlighted code.
 /// It is used in code blocks within the message and in the markdown renderer.
-/// Updated to include a transparent selectable overlay wrapped in a Focus widget
-/// to allow code selection via keyboard shortcuts.
+/// Updated to allow for continuous text selection across the entire message.
+/// Updated to allow for keyboard shortcuts
 ///
 class CodeContentWidget extends StatelessWidget {
   final String code;
@@ -711,37 +752,162 @@ class CodeContentWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDarkTheme = isDark;
+    final contentBgColor = isDark ? const Color(0xFF282C34) : const Color(0xFFFAFAFA);
+    
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      child: Stack(
-        children: [
-          // Visual layer with syntax highlighting.
-          HighlightView(
-            code,
-            language: language.isEmpty ? 'plaintext' : language,
-            theme: isDarkTheme ? atomOneDarkTheme : atomOneLightTheme,
-            textStyle: GoogleFonts.firaCode(
-              fontSize: theme.textTheme.bodyMedium!.fontSize,
-              height: 1.5,
-            ),
-            padding: EdgeInsets.zero,
-          ),
-          // Transparent selectable layer overlay wrapped in Focus.
-          Positioned.fill(
-            child: Focus(
-              child: SelectableText(
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: contentBgColor,
+        borderRadius: const BorderRadius.vertical(
+          bottom: Radius.circular(8),
+        ),
+      ),
+      child: Material(
+        color: contentBgColor,
+        child: Stack(
+          children: [
+            // The visible syntax-highlighted code
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: HighlightView(
                 code,
-                style: GoogleFonts.firaCode(
+                language: language.isEmpty ? 'plaintext' : language,
+                theme: isDarkTheme ? atomOneDarkTheme : atomOneLightTheme,
+                textStyle: GoogleFonts.firaCode(
                   fontSize: theme.textTheme.bodyMedium!.fontSize,
                   height: 1.5,
-                  color: Colors.transparent, // Invisible but selectable.
+                ),
+                padding: EdgeInsets.zero,
+              ),
+            ),
+            // Transparent overlay for selection
+            Positioned.fill(
+              child: MouseRegion(
+                cursor: SystemMouseCursors.text,
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  color: Colors.transparent,
+                  child: SelectableText(
+                    code,
+                    style: GoogleFonts.firaCode(
+                      fontSize: theme.textTheme.bodyMedium!.fontSize,
+                      height: 1.5,
+                      color: Colors.transparent, // Invisible but selectable text
+                    ),
+                    enableInteractiveSelection: true,
+                    showCursor: true,
+                    cursorColor: isDark ? Colors.white70 : Colors.black54,
+                    focusNode: FocusNode(), // Dedicated focus node for better keyboard interaction
+                    contextMenuBuilder: (context, editableTextState) {
+                      return AdaptiveTextSelectionToolbar.editableText(
+                        editableTextState: editableTextState,
+                      );
+                    },
+                    // Support for keyboard shortcuts
+                    onSelectionChanged: (selection, cause) {
+                      // Handle copy keyboard shortcut
+                      if (selection != null && 
+                          HardwareKeyboard.instance.logicalKeysPressed.contains(LogicalKeyboardKey.controlLeft) &&
+                          HardwareKeyboard.instance.logicalKeysPressed.contains(LogicalKeyboardKey.keyC)) {
+                        final selectedText = code.substring(selection.start, selection.end);
+                        Clipboard.setData(ClipboardData(text: selectedText));
+                      }
+                    },
+                  ),
                 ),
               ),
             ),
-          ),
-        ],
+            
+            // Sticky copy button at top right
+            Positioned(
+              top: 8,
+              right: 8,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: isDark 
+                    ? Colors.black.withOpacity(0.5) 
+                    : Colors.white.withOpacity(0.7),
+                  borderRadius: BorderRadius.circular(4),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.1),
+                      blurRadius: 4,
+                      offset: const Offset(0, 1),
+                    ),
+                  ],
+                ),
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: () {
+                      final cleanCode = code
+                          .replaceAll(RegExp(r'\r\n|\r'), '\n')
+                          .replaceAll(RegExp(r'\n\s*\n'), '\n\n');
+                      Clipboard.setData(ClipboardData(text: cleanCode));
+                      
+                      // Show feedback to user
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: const Text('Code copied to clipboard'),
+                          duration: const Duration(seconds: 2),
+                          behavior: SnackBarBehavior.floating,
+                          width: 200,
+                        ),
+                      );
+                    },
+                    borderRadius: BorderRadius.circular(4),
+                    child: Padding(
+                      padding: const EdgeInsets.all(6.0),
+                      child: Icon(
+                        Icons.content_copy_rounded,
+                        size: 16,
+                        color: isDark 
+                          ? Colors.white.withOpacity(0.9) 
+                          : Colors.black.withOpacity(0.7),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
+}
+
+class NoisePainter extends CustomPainter {
+  final Color color;
+  final double opacity;
+  final double density;
+  final Random random = Random(42); // Fixed seed for consistent pattern
+
+  NoisePainter({
+    required this.color,
+    this.opacity = 0.1,
+    this.density = 20,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color.withOpacity(opacity)
+      ..strokeCap = StrokeCap.round
+      ..strokeWidth = 0.5;
+
+    for (var i = 0; i < size.width * size.height / density; i++) {
+      final x = random.nextDouble() * size.width;
+      final y = random.nextDouble() * size.height;
+      canvas.drawPoints(
+        ui.PointMode.points,
+        [Offset(x, y)],
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(NoisePainter oldDelegate) => false;
 }

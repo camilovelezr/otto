@@ -5,7 +5,7 @@ class EnvConfig {
   factory EnvConfig() => _instance;
   EnvConfig._internal();
 
-  static String get backendUrl => dotenv.env['BACKEND_URL'] ?? 'http://localhost:8000';
+  static String get backendUrl => dotenv.env['BACKEND_URL'] ?? 'http://localhost:4000';
   static bool get debugMode => (dotenv.env['DEBUG_MODE']?.toLowerCase() == 'true') || false;
 
   static Future<void> load() async {

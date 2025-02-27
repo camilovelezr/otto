@@ -169,9 +169,9 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       color: theme.colorScheme.background,
       child: ClipRect(
         child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+          filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
           child: Container(
-            color: theme.colorScheme.background.withOpacity(0.7),
+            color: theme.colorScheme.background.withOpacity(0.65),
             padding: EdgeInsets.only(
               left: 16,
               right: 16,
@@ -188,20 +188,20 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                       end: Alignment.bottomRight,
                       colors: [
                         theme.colorScheme.primary,
-                        Color.lerp(
-                          theme.colorScheme.primary,
-                          theme.colorScheme.secondary,
-                          0.3,
-                        )!,
+                        Color.lerp(theme.colorScheme.primary, theme.colorScheme.secondary, 0.2)!,
+                        Color.lerp(theme.colorScheme.primary, theme.colorScheme.secondary, 0.4)!,
+                        Color.lerp(theme.colorScheme.primary, theme.colorScheme.secondary, 0.6)!,
+                        theme.colorScheme.secondary,
                       ],
+                      stops: const [0.0, 0.25, 0.5, 0.75, 1.0],
                     ),
                     borderRadius: BorderRadius.circular(16),
                     boxShadow: [
                       BoxShadow(
-                        color: theme.colorScheme.primary.withOpacity(0.15),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                        spreadRadius: 0,
+                        color: theme.colorScheme.primary.withOpacity(0.12),
+                        blurRadius: 12,
+                        offset: const Offset(0, 3),
+                        spreadRadius: -1,
                       ),
                     ],
                   ),
@@ -239,7 +239,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                 if (chatProvider.selectedModel != null)
                   Flexible(
                     child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 300),
+                      constraints: const BoxConstraints(maxWidth: 220),
                       child: AnimatedBuilder(
                         animation: _shimmerController,
                         builder: (context, child) {
@@ -249,13 +249,17 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                                 begin: Alignment.topLeft,
                                 end: Alignment.bottomRight,
                                 colors: [
-                                  theme.colorScheme.surface.withOpacity(0.5),
-                                  theme.colorScheme.surface.withOpacity(0.7),
-                                  theme.colorScheme.surface.withOpacity(0.5),
+                                  theme.colorScheme.surface.withOpacity(0.4),
+                                  theme.colorScheme.surface.withOpacity(0.6),
+                                  theme.colorScheme.surface.withOpacity(0.8),
+                                  theme.colorScheme.surface.withOpacity(0.6),
+                                  theme.colorScheme.surface.withOpacity(0.4),
                                 ],
                                 stops: [
                                   0.0,
+                                  (_shimmerController.value - 0.2).clamp(0.0, 1.0),
                                   _shimmerController.value,
+                                  (_shimmerController.value + 0.2).clamp(0.0, 1.0),
                                   1.0,
                                 ],
                               ),
@@ -386,20 +390,20 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                                                     end: Alignment.bottomRight,
                                                     colors: [
                                                       theme.colorScheme.primary,
-                                                      Color.lerp(
-                                                        theme.colorScheme.primary,
-                                                        theme.colorScheme.secondary,
-                                                        0.3,
-                                                      )!,
+                                                      Color.lerp(theme.colorScheme.primary, theme.colorScheme.secondary, 0.25)!,
+                                                      Color.lerp(theme.colorScheme.primary, theme.colorScheme.secondary, 0.5)!,
+                                                      Color.lerp(theme.colorScheme.primary, theme.colorScheme.secondary, 0.75)!,
+                                                      theme.colorScheme.secondary,
                                                     ],
+                                                    stops: const [0.0, 0.25, 0.5, 0.75, 1.0],
                                                   ),
                                                   borderRadius: BorderRadius.circular(24),
                                                   boxShadow: [
                                                     BoxShadow(
-                                                      color: theme.colorScheme.primary.withOpacity(0.15),
-                                                      blurRadius: 8,
-                                                      offset: const Offset(0, 2),
-                                                      spreadRadius: 0,
+                                                      color: theme.colorScheme.primary.withOpacity(0.12),
+                                                      blurRadius: 16,
+                                                      offset: const Offset(0, 4),
+                                                      spreadRadius: -2,
                                                     ),
                                                   ],
                                                 ),
@@ -443,21 +447,32 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                         top: 0,
                       ),
                       decoration: BoxDecoration(
-                        color: theme.colorScheme.surface.withOpacity(0.7),
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [
+                            theme.colorScheme.surface.withOpacity(0.5),
+                            theme.colorScheme.surface.withOpacity(0.65),
+                            theme.colorScheme.surface.withOpacity(0.8),
+                            theme.colorScheme.surface.withOpacity(0.65),
+                            theme.colorScheme.surface.withOpacity(0.5),
+                          ],
+                          stops: const [0.0, 0.25, 0.5, 0.75, 1.0],
+                        ),
                         borderRadius: BorderRadius.circular(24),
                         boxShadow: [
                           BoxShadow(
-                            color: theme.colorScheme.shadow.withOpacity(0.08),
-                            blurRadius: 8,
-                            offset: const Offset(0, 2),
-                            spreadRadius: 0,
+                            color: theme.colorScheme.shadow.withOpacity(0.06),
+                            blurRadius: 12,
+                            offset: const Offset(0, 3),
+                            spreadRadius: -2,
                           ),
                         ],
                       ),
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(24),
                         child: BackdropFilter(
-                          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                          filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
                           child: Container(
                             padding: const EdgeInsets.symmetric(vertical: 8),
                             color: Colors.transparent,
@@ -506,13 +521,25 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   width: 120,
                   height: 120,
                   decoration: BoxDecoration(
-                    gradient: context.read<ThemeProvider>().primaryGradient,
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        theme.colorScheme.primary,
+                        Color.lerp(theme.colorScheme.primary, theme.colorScheme.secondary, 0.3)!,
+                        Color.lerp(theme.colorScheme.primary, theme.colorScheme.secondary, 0.5)!,
+                        Color.lerp(theme.colorScheme.primary, theme.colorScheme.secondary, 0.7)!,
+                        theme.colorScheme.secondary,
+                      ],
+                      stops: const [0.0, 0.25, 0.5, 0.75, 1.0],
+                    ),
                     borderRadius: BorderRadius.circular(60),
                     boxShadow: [
                       BoxShadow(
-                        color: theme.colorScheme.primary.withOpacity(0.2),
-                        blurRadius: 20,
-                        offset: const Offset(0, 10),
+                        color: theme.colorScheme.primary.withOpacity(0.15),
+                        blurRadius: 24,
+                        offset: const Offset(0, 8),
+                        spreadRadius: -2,
                       ),
                     ],
                   ),

@@ -26,11 +26,8 @@ class ChatMessage {
       role: json['role'] as String,
       timestamp: DateTime.parse(json['timestamp'] as String),
       model: json['model'] != null 
-        ? LLMModel.fromName(
-            json['model']['name'] as String,
-            platform: json['model']['platform'] as String,
-          )
-        : null,
+            ? LLMModel(name: json['model']['name'] as String)
+            : null,
     );
   }
 
@@ -39,9 +36,6 @@ class ChatMessage {
     'content': content,
     'role': role,
     'timestamp': timestamp.toIso8601String(),
-    'model': model != null ? {
-      'name': model!.name,
-      'platform': model!.platform,
-    } : null,
+    'model': model?.name,
   };
 } 

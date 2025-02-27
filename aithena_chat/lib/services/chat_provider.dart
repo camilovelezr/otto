@@ -14,7 +14,6 @@ class ChatProvider with ChangeNotifier {
   String? _error;
   String _currentStreamedResponse = '';
   static const String _selectedModelKey = 'selected_model';
-  static const String _selectedModelPlatformKey = 'selected_model_platform';
 
   ChatProvider({ChatService? chatService}) : _chatService = chatService ?? ChatService();
 
@@ -38,29 +37,17 @@ class ChatProvider with ChangeNotifier {
 
       // Load models from different endpoints in parallel
       final results = await Future.wait([
-        _chatService.getOllamaModels().catchError((e) {
-          debugPrint('Ollama models error: $e');
-          return <String>[];
-        }),
-        _chatService.getOpenAIModels().catchError((e) {
-          debugPrint('OpenAI models error: $e');
-          return <String>[];
-        }),
-        _chatService.getGroqModels().catchError((e) {
-          debugPrint('Groq models error: $e');
+        _chatService.getLLMModels().catchError((e) {
+          debugPrint('LLM models error: $e');
           return <String>[];
         }),
       ]);
 
-      final ollamaModels = results[0];
-      final openaiModels = results[1];
-      final groqModels = results[2];
+      final llmModels = results[0];
 
-      // Create LLMModel instances with correct platform
+      // Create LLMModel instances
       _availableModels = [
-        ...ollamaModels.map((name) => LLMModel.fromName(name, platform: 'ollama')),
-        ...openaiModels.map((name) => LLMModel.fromName(name, platform: 'openai')),
-        ...groqModels.map((name) => LLMModel.fromName(name, platform: 'groq')),
+        ...llmModels.map((name) => LLMModel(name: name)),
       ];
 
       if (_availableModels.isEmpty) {
@@ -70,11 +57,10 @@ class ChatProvider with ChangeNotifier {
       // Load previously selected model from SharedPreferences
       final prefs = await SharedPreferences.getInstance();
       final savedModelName = prefs.getString(_selectedModelKey);
-      final savedModelPlatform = prefs.getString(_selectedModelPlatformKey);
       
-      if (savedModelName != null && savedModelPlatform != null) {
+      if (savedModelName != null) {
         final savedModel = _availableModels.firstWhere(
-          (model) => model.name == savedModelName && model.platform == savedModelPlatform,
+          (model) => model.name == savedModelName,
           orElse: () => _availableModels.first,
         );
         await selectModel(savedModel);
@@ -96,7 +82,6 @@ class ChatProvider with ChangeNotifier {
       // Save selected model to SharedPreferences
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_selectedModelKey, model.name);
-      await prefs.setString(_selectedModelPlatformKey, model.platform);
       notifyListeners();
     } catch (e) {
       _error = 'Failed to save model preference: ${e.toString()}';
