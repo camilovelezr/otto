@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../theme/theme_provider.dart';
+import '../theme/app_spacing.dart';
 import 'dart:ui' as ui show BoxHeightStyle, BoxWidthStyle;
 
 class MessageInput extends StatefulWidget {
@@ -59,7 +60,7 @@ class _MessageInputState extends State<MessageInput> {
     final themeProvider = context.watch<ThemeProvider>();
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+      padding: EdgeInsets.symmetric(horizontal: AppSpacing.blockSpacing),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
@@ -128,9 +129,9 @@ class _MessageInputState extends State<MessageInput> {
                     border: InputBorder.none,
                     enabledBorder: InputBorder.none,
                     focusedBorder: InputBorder.none,
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 12,
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: AppSpacing.inlineSpacing * 2,
+                      vertical: AppSpacing.paragraphSpacing,
                     ),
                     isDense: true,
                     focusColor: Colors.transparent,
@@ -143,7 +144,7 @@ class _MessageInputState extends State<MessageInput> {
               ),
             ),
           ),
-          const SizedBox(width: 8),
+          SizedBox(width: AppSpacing.inlineSpacing),
           AnimatedContainer(
             duration: const Duration(milliseconds: 200),
             decoration: BoxDecoration(
@@ -175,11 +176,11 @@ class _MessageInputState extends State<MessageInput> {
                 onTap: widget.isLoading ? null : _handleSubmit,
                 borderRadius: BorderRadius.circular(16),
                 child: Container(
-                  padding: const EdgeInsets.all(10),
+                  padding: EdgeInsets.all(AppSpacing.inlineSpacing + 2),
                   child: AnimatedSwitcher(
                     duration: const Duration(milliseconds: 200),
                     child: widget.isLoading
-                        ? const SizedBox(
+                        ? SizedBox(
                             width: 20,
                             height: 20,
                             child: CircularProgressIndicator(

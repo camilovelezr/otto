@@ -132,7 +132,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     _scrollController.animateTo(
       _scrollController.position.maxScrollExtent,
       duration: const Duration(milliseconds: 300),
-      curve: Curves.easeOut,
+      curve: Curves.linear,
     );
     _inputFocusNode.requestFocus();
   }
@@ -150,7 +150,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       _scrollController.animateTo(
         _scrollController.position.maxScrollExtent,
         duration: const Duration(milliseconds: 100),
-        curve: Curves.easeOut,
+        curve: Curves.linear,
       );
     });
   }
@@ -349,7 +349,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                                           top: 8,
                                           bottom: MediaQuery.of(context).padding.bottom + 15,
                                         ),
-                                        physics: const AlwaysScrollableScrollPhysics(),
+                                        physics: const ClampingScrollPhysics(),
                                         reverse: false,
                                         itemCount: messages.length,
                                         itemBuilder: (context, index) {
@@ -500,74 +500,146 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   }
 
   Widget _buildEmptyState(ThemeData theme) {
-    return ListView(
-      physics: const AlwaysScrollableScrollPhysics(),
-      padding: EdgeInsets.only(
-        top: 8,
-        bottom: 30 + MediaQuery.of(context).padding.bottom,
-      ),
-      children: [
-        SizedBox(
-          height: MediaQuery.of(context).size.height * 0.3,
-        ),
-        Center(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Container(
-                  width: 120,
-                  height: 120,
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [
-                        theme.colorScheme.primary,
-                        Color.lerp(theme.colorScheme.primary, theme.colorScheme.secondary, 0.3)!,
-                        Color.lerp(theme.colorScheme.primary, theme.colorScheme.secondary, 0.5)!,
-                        Color.lerp(theme.colorScheme.primary, theme.colorScheme.secondary, 0.7)!,
-                        theme.colorScheme.secondary,
-                      ],
-                      stops: const [0.0, 0.25, 0.5, 0.75, 1.0],
-                    ),
-                    borderRadius: BorderRadius.circular(60),
-                    boxShadow: [
-                      BoxShadow(
-                        color: theme.colorScheme.primary.withOpacity(0.15),
-                        blurRadius: 24,
-                        offset: const Offset(0, 8),
-                        spreadRadius: -2,
-                      ),
-                    ],
-                  ),
-                  child: const Icon(
-                    Icons.chat_bubble_outline_rounded,
-                    color: Colors.white,
-                    size: 48,
-                  ),
-                ),
-                const SizedBox(height: 24),
-                Text(
-                  'Start a Conversation',
-                  style: theme.textTheme.displayMedium,
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  'Select a model and start chatting',
-                  style: theme.textTheme.bodyLarge!.copyWith(
-                    color: theme.colorScheme.onBackground.withOpacity(0.7),
-                  ),
-                  textAlign: TextAlign.center,
+    final chatProvider = Provider.of<ChatProvider>(context);
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 120,
+            height: 120,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  theme.colorScheme.primary,
+                  Color.lerp(theme.colorScheme.primary, theme.colorScheme.secondary, 0.3)!,
+                  Color.lerp(theme.colorScheme.primary, theme.colorScheme.secondary, 0.5)!,
+                  Color.lerp(theme.colorScheme.primary, theme.colorScheme.secondary, 0.7)!,
+                  theme.colorScheme.secondary,
+                ],
+                stops: const [0.0, 0.25, 0.5, 0.75, 1.0],
+              ),
+              borderRadius: BorderRadius.circular(60),
+              boxShadow: [
+                BoxShadow(
+                  color: theme.colorScheme.primary.withOpacity(0.15),
+                  blurRadius: 24,
+                  offset: const Offset(0, 8),
+                  spreadRadius: -2,
                 ),
               ],
             ),
+            child: const Icon(
+              Icons.chat_bubble_outline_rounded,
+              color: Colors.white,
+              size: 48,
+            ),
           ),
-        ),
-      ],
+          
+          if (chatProvider.error != null)
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                children: [
+                  const SizedBox(height: 20),
+                  Text(
+                    'Error',
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      color: theme.colorScheme.error,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    chatProvider.error!,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onBackground.withOpacity(0.7),
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    onPressed: () {
+                      chatProvider.clearError();
+                      chatProvider.loadModels();
+                    },
+                    child: const Text('Retry'),
+                  ),
+                ],
+              ),
+            ),
+          
+          if (chatProvider.error == null)
+            const SizedBox(height: 20),
+          Text(
+            'Start a Conversation',
+            style: theme.textTheme.displayMedium,
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'Select a model and start chatting',
+            style: theme.textTheme.bodyLarge!.copyWith(
+              color: theme.colorScheme.onBackground.withOpacity(0.7),
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSidePanel() {
+    final chatProvider = Provider.of<ChatProvider>(context);
+    final themeProvider = Provider.of<ThemeProvider>(context);
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    return Drawer(
+      backgroundColor: isDark ? const Color(0xFF1F1F33) : Colors.white,
+      elevation: 0,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          AppBar(
+            automaticallyImplyLeading: false,
+            title: Text(
+              'Aithena',
+              style: theme.textTheme.displayLarge,
+            ),
+            actions: [
+              // Add a menu button for settings and tools
+              PopupMenuButton<String>(
+                icon: const Icon(Icons.settings),
+                onSelected: (value) {
+                  if (value == 'spacing') {
+                    Navigator.pushNamed(context, '/spacing-example');
+                  } else if (value == 'theme') {
+                    themeProvider.toggleTheme();
+                  }
+                },
+                itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+                  const PopupMenuItem<String>(
+                    value: 'spacing',
+                    child: Text('Spacing Guide'),
+                  ),
+                  const PopupMenuItem<String>(
+                    value: 'theme',
+                    child: Text('Toggle Theme'),
+                  ),
+                ],
+              ),
+              IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: () => _toggleSidePanel(),
+                tooltip: 'Close side panel',
+              ),
+            ],
+          ),
+          // ... rest of the existing side panel code ...
+        ],
+      ),
     );
   }
 } 

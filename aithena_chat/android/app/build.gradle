@@ -30,6 +30,27 @@ android {
         versionName = flutter.versionName
     }
 
+    flavorDimensions "environment"
+    productFlavors {
+        development {
+            dimension "environment"
+            applicationIdSuffix ".dev"
+            resValue "string", "app_name", "Aithena Chat Dev"
+            buildConfigField "String", "BASE_URL", "\"http://localhost:4000\""
+        }
+        staging {
+            dimension "environment"
+            applicationIdSuffix ".staging"
+            resValue "string", "app_name", "Aithena Chat Staging"
+            buildConfigField "String", "BASE_URL", "\"https://staging-api.example.com\""
+        }
+        production {
+            dimension "environment"
+            resValue "string", "app_name", "Aithena Chat"
+            buildConfigField "String", "BASE_URL", "\"https://production-api.example.com\""
+        }
+    }
+
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.

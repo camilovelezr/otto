@@ -6,10 +6,10 @@ echo "===== Aithena Icon Generator ====="
 echo "Generating icons for both macOS and Android platforms"
 echo "===================================="
 
-# Source icon files
-LARGE_ICON="macOS Icon Design Template (1).png"  # For larger icons
-MEDIUM_ICON="macOS Icon Design Template (2).png"  # For medium icons
-SMALL_ICON="macOS Icon Design Template (3).png"  # For smallest icons
+# Source icon files with parent directory path
+LARGE_ICON="../macOS Icon Design Template (1).png"  # For larger icons
+MEDIUM_ICON="../macOS Icon Design Template (2).png"  # For medium icons
+SMALL_ICON="../macOS Icon Design Template (3).png"  # For smallest icons
 
 # Check if source files exist
 if [ ! -f "$LARGE_ICON" ]; then

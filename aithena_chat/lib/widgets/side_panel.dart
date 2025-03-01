@@ -229,7 +229,6 @@ class _SidePanelState extends State<SidePanel> with SingleTickerProviderStateMix
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     _buildHeader(theme),
-                    const Divider(height: 1, thickness: 1),
                     _buildClearButton(theme),
                     Expanded(
                       child: SingleChildScrollView(
@@ -265,7 +264,7 @@ class _SidePanelState extends State<SidePanel> with SingleTickerProviderStateMix
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Text(
-            'Aithena Chat',
+            'Otto',
             style: theme.textTheme.titleLarge?.copyWith(
               fontWeight: FontWeight.w700,
               letterSpacing: -0.5,

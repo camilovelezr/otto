@@ -51,7 +51,9 @@ class ChatProvider with ChangeNotifier {
       ];
 
       if (_availableModels.isEmpty) {
-        throw Exception('No models available. Please check your backend connection.');
+        debugPrint('No models available from backend, using fallback models');
+        // Instead of throwing an exception, provide fallback models
+        _provideFallbackModels();
       }
       
       // Load previously selected model from SharedPreferences
@@ -70,10 +72,26 @@ class ChatProvider with ChangeNotifier {
     } catch (e) {
       _error = e.toString();
       debugPrint('Error loading models: $e');
+      // Provide fallback models even on error
+      _provideFallbackModels();
     } finally {
       _isLoading = false;
       notifyListeners();
     }
+  }
+
+  // Add fallback models when backend is not available
+  void _provideFallbackModels() {
+    // If we already have models, don't override them
+    if (_availableModels.isNotEmpty) return;
+    
+    _availableModels = [
+      LLMModel(name: 'gpt-3.5-turbo'),
+      LLMModel(name: 'gpt-4'),
+    ];
+    
+    _error = 'Could not connect to backend. Using offline mode with limited functionality.';
+    debugPrint('Using fallback models: $_availableModels');
   }
 
   Future<void> selectModel(LLMModel model) async {

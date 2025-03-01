@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:markdown/markdown.dart' as md;
+import 'package:flutter/gestures.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:flutter_highlight/flutter_highlight.dart';
-import 'package:flutter_highlight/themes/atom-one-dark.dart';
-import 'package:flutter_highlight/themes/atom-one-light.dart';
+import 'package:markdown/markdown.dart' as md;
+import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/cupertino.dart' show AdaptiveTextSelectionToolbar;
 
 /// A block-level markdown renderer that supports continuous selection across all elements
@@ -13,57 +12,106 @@ class SelectableMarkdown extends StatelessWidget {
   final String data;
   final TextStyle? baseStyle;
   final bool isDark;
+  final EdgeInsets contentPadding;
+  final bool enableSelectionToolbar;
+  final bool enableInteractiveSelection;
+  final int? maxLines;
+  final TextOverflow overflow;
+  final FocusNode? focusNode;
+  final ScrollController? scrollController;
+  final EdgeInsets textSelectionPadding;
 
   const SelectableMarkdown({
     Key? key,
     required this.data,
     this.baseStyle,
     required this.isDark,
+    this.contentPadding = EdgeInsets.zero,
+    this.enableSelectionToolbar = true,
+    this.enableInteractiveSelection = true,
+    this.maxLines,
+    this.overflow = TextOverflow.clip,
+    this.focusNode,
+    this.scrollController,
+    this.textSelectionPadding = const EdgeInsets.symmetric(horizontal: 8.0),
   }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
     // Parse markdown into text and widget blocks
-    return SelectableRegion(
-      focusNode: FocusNode(),
-      selectionControls: MaterialTextSelectionControls(),
-      child: _buildMarkdownContent(context),
-    );
+    return _buildMarkdownContent(context);
   }
 
   Widget _buildMarkdownContent(BuildContext context) {
     final theme = Theme.of(context);
+    final processedData = _preprocessContent(data);
     final document = md.Document(
       encodeHtml: false,
       extensionSet: md.ExtensionSet.gitHubWeb,
     );
-    final nodes = document.parse(data);
-
+    
     // Extract code blocks for separate rendering
     final codeBlocks = <Map<String, dynamic>>[];
-    final processedNodes = _preprocessNodes(nodes, codeBlocks);
+    final processedNodes = _preprocessNodes(document.parse(processedData), codeBlocks);
     
-    // Build rich text with text spans for inline styling
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        RichText(
-          text: TextSpan(
-            children: _buildTextSpans(processedNodes, context, theme),
-            style: baseStyle ?? theme.textTheme.bodyLarge!.copyWith(
-              color: isDark ? Colors.white : theme.colorScheme.onSurface,
-              height: 1.5,
-            ),
-          ),
-          softWrap: true,
+    // Build the content using SelectableText.rich for better selection
+    return Padding(
+      padding: contentPadding,
+      child: ScrollConfiguration(
+        behavior: ScrollConfiguration.of(context).copyWith(
+          scrollbars: false,
+          overscroll: false,
+          physics: const ClampingScrollPhysics(),
+          dragDevices: {
+            PointerDeviceKind.touch,
+            PointerDeviceKind.mouse,
+            PointerDeviceKind.trackpad,
+            PointerDeviceKind.stylus,
+          },
         ),
-        // Add code blocks as separate widgets
-        ...codeBlocks.map((block) => Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8.0),
-          child: _buildCodeBlock(context, block['code'], block['language']),
-        )),
-      ],
+        child: SelectableRegion(
+          focusNode: FocusNode(),
+          selectionControls: MaterialTextSelectionControls(),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Main text content
+              SelectableText.rich(
+                TextSpan(
+                  children: _buildTextSpans(processedNodes, context, theme),
+                  style: baseStyle ?? theme.textTheme.bodyLarge!.copyWith(
+                    color: isDark ? Colors.white : theme.colorScheme.onSurface,
+                    height: 1.5,
+                  ),
+                ),
+              ),
+              // Add code blocks as separate widgets
+              ...codeBlocks.map((block) => Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8.0),
+                child: _buildCodeBlock(context, block['code'], block['language']),
+              )),
+            ],
+          ),
+        ),
+      ),
     );
+  }
+
+  String _preprocessContent(String content) {
+    // Normalize line endings
+    String processed = content.replaceAll('\r\n', '\n');
+    
+    // Replace multiple newlines with just two (for paragraph spacing)
+    processed = processed.replaceAll(RegExp(r'\n{3,}'), '\n\n');
+    
+    // Trim trailing whitespace from each line
+    processed = processed.split('\n').map((line) => line.trimRight()).join('\n');
+    
+    // Remove trailing newlines
+    processed = processed.trimRight();
+    
+    return processed;
   }
 
   List<md.Node> _preprocessNodes(List<md.Node> nodes, List<Map<String, dynamic>> codeBlocks) {
@@ -80,8 +128,8 @@ class SelectableMarkdown extends StatelessWidget {
           'code': code,
         });
         
-        // Add a placeholder node
-        final placeholder = md.Element('p', [md.Text('\n\n')]);
+        // Add a placeholder with minimal spacing
+        final placeholder = md.Element('p', [md.Text('\n')]);
         result.add(placeholder);
       } else {
         result.add(node);
@@ -110,7 +158,7 @@ class SelectableMarkdown extends StatelessWidget {
             spans.add(const TextSpan(text: '\n\n'));
             break;
           case 'p':
-            spans.addAll(_processInlineElements(node.children!, context, theme));
+            spans.addAll(_processInlineElements(node.children!, context, theme, parentTag: node.tag));
             spans.add(const TextSpan(text: '\n\n'));
             break;
           case 'ul':
@@ -119,14 +167,14 @@ class SelectableMarkdown extends StatelessWidget {
             spans.add(const TextSpan(text: '\n'));
             break;
           case 'li':
-            final isOrdered = node.parent?.tag == 'ol';
+            final isOrdered = node.tag == 'ol';
             final index = int.tryParse(node.attributes['index'] ?? '') ?? 1;
             spans.add(TextSpan(text: isOrdered ? '$index. ' : '• '));
-            spans.addAll(_processInlineElements(node.children!, context, theme));
+            spans.addAll(_processInlineElements(node.children!, context, theme, parentTag: node.tag));
             spans.add(const TextSpan(text: '\n'));
             break;
           case 'code':
-            if (node.parent?.tag != 'pre') {
+            if (node.tag != 'pre') {
               spans.add(_buildInlineCodeSpan(node.textContent, context, theme));
             }
             break;
@@ -145,8 +193,16 @@ class SelectableMarkdown extends StatelessWidget {
               style: const TextStyle(fontStyle: FontStyle.italic),
             ));
             break;
+          case 'blockquote':
+            spans.add(_buildBlockquoteSpan(node, context, theme));
+            spans.add(const TextSpan(text: '\n\n'));
+            break;
+          case 'hr':
+            spans.add(_buildHorizontalRuleSpan(context, theme));
+            spans.add(const TextSpan(text: '\n\n'));
+            break;
           default:
-            spans.addAll(_processInlineElements(node.children ?? [], context, theme));
+            spans.addAll(_processInlineElements(node.children ?? [], context, theme, parentTag: node.tag));
             break;
         }
       } else if (node is md.Text) {
@@ -157,7 +213,7 @@ class SelectableMarkdown extends StatelessWidget {
     return spans;
   }
 
-  List<InlineSpan> _processInlineElements(List<md.Node> nodes, BuildContext context, ThemeData theme) {
+  List<InlineSpan> _processInlineElements(List<md.Node> nodes, BuildContext context, ThemeData theme, {String? parentTag}) {
     final spans = <InlineSpan>[];
     
     for (final node in nodes) {
@@ -176,14 +232,19 @@ class SelectableMarkdown extends StatelessWidget {
             ));
             break;
           case 'code':
-            spans.add(_buildInlineCodeSpan(node.textContent, context, theme));
+            if (parentTag != 'pre') {
+              spans.add(_buildInlineCodeSpan(node.textContent, context, theme));
+            }
             break;
           case 'a':
             spans.add(_buildLinkSpan(node.textContent, node.attributes['href'] ?? '', context, theme));
             break;
+          case 'br':
+            spans.add(const TextSpan(text: '\n'));
+            break;
           default:
             if (node.children != null) {
-              spans.addAll(_processInlineElements(node.children!, context, theme));
+              spans.addAll(_processInlineElements(node.children!, context, theme, parentTag: node.tag));
             } else {
               spans.add(TextSpan(text: node.textContent));
             }
@@ -198,20 +259,33 @@ class SelectableMarkdown extends StatelessWidget {
   }
 
   TextSpan _buildHeadingSpan(String text, int level, BuildContext context, ThemeData theme) {
-    final fontSize = switch (level) {
-      1 => 24.0,
-      2 => 20.0,
-      3 => 18.0,
-      _ => 16.0,
-    };
+    double fontSize;
+    FontWeight fontWeight;
+    
+    switch (level) {
+      case 1:
+        fontSize = 24.0;
+        fontWeight = FontWeight.bold;
+        break;
+      case 2:
+        fontSize = 20.0;
+        fontWeight = FontWeight.bold;
+        break;
+      case 3:
+        fontSize = 18.0;
+        fontWeight = FontWeight.bold;
+        break;
+      default:
+        fontSize = 16.0;
+        fontWeight = FontWeight.bold;
+    }
     
     return TextSpan(
       text: text,
       style: TextStyle(
         fontSize: fontSize,
-        fontWeight: FontWeight.bold,
-        color: isDark ? Colors.white : theme.colorScheme.onSurface,
-        height: 1.5,
+        fontWeight: fontWeight,
+        height: 1.4,
       ),
     );
   }
@@ -235,19 +309,24 @@ class SelectableMarkdown extends StatelessWidget {
         color: theme.colorScheme.primary,
         decoration: TextDecoration.underline,
       ),
-      recognizer: null, // We don't add gesture recognizer as it interferes with selection
+      recognizer: TapGestureRecognizer()
+        ..onTap = () async {
+          if (await canLaunchUrl(Uri.parse(url))) {
+            await launchUrl(Uri.parse(url));
+          }
+        },
     );
   }
 
-  List<InlineSpan> _buildListSpans(md.Element listElement, BuildContext context, ThemeData theme) {
+  List<InlineSpan> _buildListSpans(md.Element list, BuildContext context, ThemeData theme) {
     final spans = <InlineSpan>[];
-    final isOrdered = listElement.tag == 'ol';
-    var index = 1;
+    final isOrdered = list.tag == 'ol';
+    int index = 1;
     
-    for (final child in listElement.children!) {
+    for (final child in list.children!) {
       if (child is md.Element && child.tag == 'li') {
         spans.add(TextSpan(text: isOrdered ? '${index++}. ' : '• '));
-        spans.addAll(_processInlineElements(child.children!, context, theme));
+        spans.addAll(_processInlineElements(child.children!, context, theme, parentTag: child.tag));
         spans.add(const TextSpan(text: '\n'));
       }
     }
@@ -255,22 +334,64 @@ class SelectableMarkdown extends StatelessWidget {
     return spans;
   }
 
+  TextSpan _buildBlockquoteSpan(md.Element blockquote, BuildContext context, ThemeData theme) {
+    final isDark = theme.brightness == Brightness.dark;
+    
+    return TextSpan(
+      children: [
+        TextSpan(
+          children: _processInlineElements(blockquote.children!, context, theme),
+          style: TextStyle(
+            color: isDark ? Colors.grey[300] : Colors.grey[800],
+            fontStyle: FontStyle.italic,
+          ),
+        ),
+      ],
+      style: TextStyle(
+        background: Paint()
+          ..color = isDark 
+              ? Colors.grey[900]!.withOpacity(0.18) 
+              : Colors.grey[300]!.withOpacity(0.18)
+          ..style = PaintingStyle.fill,
+      ),
+    );
+  }
+
+  TextSpan _buildHorizontalRuleSpan(BuildContext context, ThemeData theme) {
+    return const TextSpan(
+      text: '───────────────────────────────────',
+      style: TextStyle(
+        color: Colors.grey,
+        fontWeight: FontWeight.w200,
+        letterSpacing: 2.0,
+      ),
+    );
+  }
+
   Widget _buildCodeBlock(BuildContext context, String code, String language) {
     final theme = Theme.of(context);
+    final containerColor = isDark ? const Color(0xFF282C34) : const Color(0xFFF6F8FA);
     final headerBgColor = isDark ? const Color(0xFF21252B) : const Color(0xFFF0F0F0);
-    final contentBgColor = isDark ? const Color(0xFF282C34) : const Color(0xFFFAFAFA);
+    final contentBgColor = isDark ? const Color(0xFF282C34) : const Color(0xFFF6F8FA);
     
     return Container(
-      width: double.infinity,
       decoration: BoxDecoration(
-        color: contentBgColor,
+        color: containerColor,
         borderRadius: BorderRadius.circular(8),
+        boxShadow: [
+          BoxShadow(
+            color: isDark ? Colors.black.withOpacity(0.3) : Colors.black.withOpacity(0.1),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
-      clipBehavior: Clip.antiAlias,
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      width: double.infinity,
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Code block header
+          // Code block header with language and copy button
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             decoration: BoxDecoration(
@@ -306,24 +427,11 @@ class SelectableMarkdown extends StatelessWidget {
                       cursor: SystemMouseCursors.click,
                       child: GestureDetector(
                         onTap: () {
-                          final cleanCode = code
-                              .replaceAll(RegExp(r'\r\n|\r'), '\n')
-                              .replaceAll(RegExp(r'\n\s*\n'), '\n\n');
-                          Clipboard.setData(ClipboardData(text: cleanCode));
-                          
-                          // Show feedback if we can access the scaffold
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: const Text('Code copied to clipboard'),
-                              duration: const Duration(seconds: 2),
-                              behavior: SnackBarBehavior.floating,
-                              width: 200,
-                            ),
-                          );
+                          Clipboard.setData(ClipboardData(text: code));
                         },
                         child: Icon(
                           Icons.content_copy_rounded,
-                          size: 18,
+                          size: 16,
                           color: isDark ? const Color(0xFF9DA5B4) : const Color(0xFF383A42),
                         ),
                       ),
@@ -333,7 +441,7 @@ class SelectableMarkdown extends StatelessWidget {
               ],
             ),
           ),
-          // Code content with proper syntax highlighting
+          // Code content with syntax highlighting and selection overlay
           Material(
             color: contentBgColor,
             child: Stack(
@@ -349,30 +457,27 @@ class SelectableMarkdown extends StatelessWidget {
                   ),
                   padding: const EdgeInsets.all(16),
                 ),
-                // Transparent overlay for selection
+                // Transparent overlay for selection - using SelectableText directly
                 Positioned.fill(
-                  child: MouseRegion(
-                    cursor: SystemMouseCursors.text,
-                    child: Container(
-                      padding: const EdgeInsets.all(16),
-                      color: Colors.transparent,
-                      child: SelectableText(
-                        code,
-                        style: GoogleFonts.firaCode(
-                          fontSize: theme.textTheme.bodyMedium!.fontSize,
-                          height: 1.5,
-                          color: Colors.transparent, // Make text transparent
-                        ),
-                        enableInteractiveSelection: true,
-                        showCursor: true,
-                        cursorColor: isDark ? Colors.white70 : Colors.black54,
-                        focusNode: FocusNode(), // Dedicated focus node for better keyboard interaction
-                        contextMenuBuilder: (context, editableTextState) {
-                          return AdaptiveTextSelectionToolbar.editableText(
-                            editableTextState: editableTextState,
-                          );
-                        },
+                  child: Container(
+                    padding: const EdgeInsets.all(16),
+                    color: Colors.transparent,
+                    child: SelectableText(
+                      code,
+                      style: GoogleFonts.firaCode(
+                        fontSize: theme.textTheme.bodyMedium!.fontSize,
+                        height: 1.5,
+                        color: Colors.transparent, // Make text transparent
                       ),
+                      enableInteractiveSelection: true,
+                      showCursor: true,
+                      cursorWidth: 1.5,
+                      cursorColor: isDark ? Colors.white70 : Colors.black54,
+                      contextMenuBuilder: (context, editableTextState) {
+                        return AdaptiveTextSelectionToolbar.editableText(
+                          editableTextState: editableTextState,
+                        );
+                      },
                     ),
                   ),
                 ),

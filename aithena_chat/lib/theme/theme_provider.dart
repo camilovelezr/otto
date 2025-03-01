@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'app_spacing.dart'; // Import for spacing constants
 
 class ThemeProvider extends ChangeNotifier {
   static const String _themeKey = 'is_dark_mode';
@@ -11,6 +12,10 @@ class ThemeProvider extends ChangeNotifier {
   }
 
   bool get isDarkMode => _isDarkMode;
+
+  // Note: AppSpacing constants should be accessed directly:
+  // import '../theme/app_spacing.dart';
+  // Then use: AppSpacing.blockSpacing, AppSpacing.headerSpacer, etc.
 
   static const _primaryGradient = [Color(0xFF7B61FF), Color(0xFF9C8FFF)];
   static const _secondaryGradient = [Color(0xFFFF6B6B), Color(0xFFFF8E8E)];
@@ -192,7 +197,7 @@ class ThemeProvider extends ChangeNotifier {
           width: 2,
         ),
       ),
-      contentPadding: const EdgeInsets.all(16),
+      contentPadding: EdgeInsets.all(AppSpacing.inlineSpacing * 2),
       hintStyle: TextStyle(
         fontFamily: 'Inter',
         color: (isDark ? Colors.white : const Color(0xFF1A1A2E)).withOpacity(0.5),

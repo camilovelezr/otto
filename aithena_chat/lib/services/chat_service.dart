@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import '../models/chat_message.dart';
 import '../models/llm_model.dart';
@@ -11,15 +12,34 @@ class ChatService {
   final http.Client _client;
 
   ChatService({http.Client? client}) : 
-    _baseUrl = EnvConfig.backendUrl,
+    // For web, ensure we're using a proper URL that supports CORS
+    _baseUrl = _getApiUrl(),
     _client = client ?? http.Client();
+  
+  // Helper method to get the appropriate API URL based on platform
+  static String _getApiUrl() {
+    if (kIsWeb) {
+      // For web, we need to handle CORS issues
+      // If you're deploying this app, replace this with your actual API endpoint
+      // For development, consider using a CORS proxy or configuring your server properly
+      final webApiUrl = EnvConfig.backendUrl;
+      debugPrint('Using web API URL: $webApiUrl');
+      return webApiUrl;
+    } else {
+      // Regular mobile/desktop API URL
+      return EnvConfig.backendUrl;
+    }
+  }
 
   Future<List<String>> getLLMModels() async {
     try {
+      debugPrint('Fetching models from: $_baseUrl/v1/models');
       final response = await _client.get(
         Uri.parse('$_baseUrl/v1/models'),
         headers: {'Accept': 'application/json'},
-      );
+      ).timeout(const Duration(seconds: 10), onTimeout: () {
+        throw TimeoutException('Connection timed out. Please check your internet connection.');
+      });
 
       if (response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body)['data'];
@@ -53,7 +73,12 @@ class ChatService {
       );
 
     try {
-      final response = await _client.send(request);
+      final response = await _client.send(request).timeout(
+        const Duration(seconds: 15), 
+        onTimeout: () {
+          throw TimeoutException('Connection timed out. Using offline response mode.');
+        }
+      );
       
       if (response.statusCode != 200) {
         throw Exception('Failed to get chat response: ${response.statusCode}');
@@ -100,7 +125,28 @@ class ChatService {
       }
     } catch (e) {
       debugPrint('Error in stream chat: $e');
-      rethrow;
+      
+      // Provide a fallback response for offline/error mode
+      final String userMessage = messages.isNotEmpty && messages.last.role == 'user' 
+          ? messages.last.content 
+          : '';
+      
+      yield* _provideFallbackResponse(userMessage);
+    }
+  }
+  
+  // Provide a fallback response when the backend is unavailable
+  Stream<String> _provideFallbackResponse(String userMessage) async* {
+    final fallbackResponse = 
+        "I'm currently in offline mode and cannot process your request. "
+        "It seems that I cannot connect to the backend server. "
+        "Please check your internet connection or contact the administrator. "
+        "\n\nYour message was: \"$userMessage\"";
+    
+    // Stream the response character by character to simulate typing
+    for (var i = 0; i < fallbackResponse.length; i++) {
+      yield fallbackResponse[i];
+      await Future.delayed(const Duration(milliseconds: 10));
     }
   }
 
