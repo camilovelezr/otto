@@ -1,0 +1,6 @@
+*.env
+*.code-workspace
+*.ipynb
+*poetry.lock
+*.log
+*.DS_Store
