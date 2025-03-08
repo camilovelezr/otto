@@ -8,10 +8,11 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends, Body, Query, status
 from fastapi.responses import JSONResponse
 import httpx
+import openai
 from pydantic import BaseModel, UUID4
 
 from mongython.models.conversation import Conversation
-from mongython.models.message import Message, MessageMetadata
+from mongython.models.message import Message, TokenWindowState
 from mongython.api.errors import ErrorResponse
 from mongython.api.users import get_current_user
 from mongython.models.user import User
@@ -19,7 +20,6 @@ from dotenv import load_dotenv, find_dotenv
 import os
 
 load_dotenv(find_dotenv())
-
 
 router = APIRouter(
     prefix="/conversations",
@@ -33,8 +33,12 @@ router = APIRouter(
 logger = logging.getLogger(__name__)
 
 SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "llama-3.2-1b-preview")
-INTERNAL_API_URL = os.getenv("INTERNAL_API_URL")
 LITELLM_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY")
+LITELLM_URL = os.getenv("LITELLM_URL")
+
+logger.info(f"SUMMARY_MODEL: {SUMMARY_MODEL}")
+logger.info(f"LITELLM_MASTER_KEY: {LITELLM_MASTER_KEY}")
+logger.info(f"LITELLM_URL: {LITELLM_URL}")
 
 
 # Request and response models
@@ -59,7 +63,7 @@ class MessageResponse(BaseModel):
     content: str
     created_at: str
     model_id: Optional[str] = None
-    metadata: Dict[str, Any]
+    token_count: int = 0
     parent_id: Optional[str] = None
 
 
@@ -147,10 +151,8 @@ async def get_conversation(
 ):
     """Get details for a specific conversation."""
     conversation = await Conversation.find_one(
-        (Conversation.id == UUID4(conversation_id))
-        & (Conversation.user.id == current_user.id),
-        fetch_links=True,
-    )
+        Conversation.id == UUID4(conversation_id), fetch_links=True
+    ).find_one(Conversation.user.id == current_user.id, fetch_links=True)
 
     if not conversation:
         raise HTTPException(
@@ -178,10 +180,8 @@ async def update_conversation_title(
 ):
     """Update the title of a conversation."""
     conversation = await Conversation.find_one(
-        (Conversation.id == UUID4(conversation_id))
-        & (Conversation.user.id == current_user.id),
-        fetch_links=True,
-    )
+        Conversation.id == UUID4(conversation_id), fetch_links=True
+    ).find_one(Conversation.user.id == current_user.id, fetch_links=True)
 
     if not conversation:
         raise HTTPException(
@@ -198,7 +198,7 @@ async def update_conversation_title(
         title=conversation.title,
         created_at=conversation.created_at.isoformat(),
         updated_at=conversation.updated_at.isoformat(),
-        token_window=conversation.token_window.dict(),
+        token_window=conversation.token_window.model_dump(),
         tags=conversation.tags,
         detected_topics=conversation.detected_topics,
         summary=conversation.summary,
@@ -212,10 +212,8 @@ async def get_conversation_messages(
 ):
     """Get all messages for a conversation."""
     conversation = await Conversation.find_one(
-        (Conversation.id == UUID4(conversation_id))
-        & (Conversation.user.id == current_user.id),
-        fetch_links=True,
-    )
+        Conversation.id == UUID4(conversation_id), fetch_links=True
+    ).find_one(Conversation.user.id == current_user.id, fetch_links=True)
 
     if not conversation:
         raise HTTPException(
@@ -237,7 +235,7 @@ async def get_conversation_messages(
                 content=msg.content,
                 created_at=msg.created_at.isoformat(),
                 model_id=msg.model_id,
-                metadata=msg.metadata.dict(),
+                token_count=msg.token_count,
                 parent_id=str(msg.parent_message_id) if msg.parent_message_id else None,
             )
             for msg in messages
@@ -290,8 +288,8 @@ async def add_message(
             try:
                 parent_uuid = UUID4(message_data.parent_id)
                 parent_message = await Message.find_one(
-                    (Message.id == parent_uuid) & (Message.conversation_id == conv_uuid)
-                )
+                    Message.id == parent_uuid, fetch_links=True
+                ).find_one(Message.conversation_id == conv_uuid, fetch_links=True)
 
                 if not parent_message:
                     raise HTTPException(
@@ -306,11 +304,6 @@ async def add_message(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Invalid parent message ID format",
                 )
-
-        # Create metadata if provided
-        metadata = None
-        if message_data.metadata:
-            metadata = MessageMetadata(**message_data.metadata)
 
         # Add the message based on role
         if message_data.role == "user":
@@ -359,7 +352,7 @@ async def add_message(
                 {"conversation_id": conversation.id}
             ).count()
 
-            if message_count >= 5 and not conversation.title:
+            if message_count >= 2 and not conversation.title:
                 await generate_conversation_title(conversation)
         except Exception as e:
             # Don't fail the whole request if title generation fails
@@ -371,7 +364,7 @@ async def add_message(
             content=message.content,
             created_at=message.created_at.isoformat(),
             model_id=message.model_id,
-            metadata=message.metadata.model_dump(),
+            token_count=message.token_count,
             parent_id=(
                 str(message.parent_message_id) if message.parent_message_id else None
             ),
@@ -395,10 +388,8 @@ async def delete_conversation(
 ):
     """Delete a conversation and all its messages."""
     conversation = await Conversation.find_one(
-        (Conversation.id == UUID4(conversation_id))
-        & (Conversation.user.id == current_user.id),
-        fetch_links=True,
-    )
+        Conversation.id == UUID4(conversation_id), fetch_links=True
+    ).find_one(Conversation.user.id == current_user.id, fetch_links=True)
 
     if not conversation:
         raise HTTPException(
@@ -412,7 +403,9 @@ async def delete_conversation(
     # Delete the conversation
     await conversation.delete()
 
-    return JSONResponse(status_code=status.HTTP_204_NO_CONTENT, content={})
+    # For a 204 response, don't return a JSON body - just return None
+    # FastAPI will automatically convert this to a 204 No Content response
+    return None
 
 
 @router.get(
@@ -426,10 +419,8 @@ async def get_message_thread(
 ):
     """Get a thread of messages starting from a specific message."""
     conversation = await Conversation.find_one(
-        (Conversation.id == UUID4(conversation_id))
-        & (Conversation.user.id == current_user.id),
-        fetch_links=True,
-    )
+        Conversation.id == UUID4(conversation_id), fetch_links=True
+    ).find_one(Conversation.user.id == current_user.id, fetch_links=True)
 
     if not conversation:
         raise HTTPException(
@@ -453,7 +444,7 @@ async def get_message_thread(
                 content=msg.content,
                 created_at=msg.created_at.isoformat(),
                 model_id=msg.model_id,
-                metadata=msg.metadata.dict(),
+                token_count=msg.token_count,
                 parent_id=str(msg.parent_message_id) if msg.parent_message_id else None,
             )
             for msg in thread
@@ -473,7 +464,7 @@ async def generate_conversation_title(conversation: Conversation) -> Optional[st
         # Extract just what we need
         message_dicts = [
             {"role": msg.role, "content": msg.content}
-            for msg in messages[:5]  # Limit to first 5 messages to avoid token limits
+            for msg in messages[:2]  # Limit to first 5 messages to avoid token limits
         ]
 
         # Add system prompt
@@ -490,19 +481,15 @@ async def generate_conversation_title(conversation: Conversation) -> Optional[st
             },
         )
 
-        # Call LLM for title generation
-        async with httpx.AsyncClient(base_url=INTERNAL_API_URL) as client:
-            response = await client.post(
-                "/litellm/v1/chat/completions",
-                json={
-                    "model": SUMMARY_MODEL,
-                    "messages": message_dicts,
-                    "max_tokens": 60,
-                    "temperature": 0.7,
-                },
-                headers={"Authorization": f"Bearer {LITELLM_MASTER_KEY}"},
-            )
-        title = response.json()["choices"][0]["message"]["content"].strip().strip('"')
+        # Call the LLM
+        client_ = openai.AsyncOpenAI(api_key=LITELLM_MASTER_KEY, base_url=LITELLM_URL)
+        response = await client_.chat.completions.create(
+            model=SUMMARY_MODEL,
+            messages=message_dicts,
+            max_tokens=60,
+            temperature=0.7,
+        )
+        title = response.choices[0].message.content.strip().strip('"')
 
         # Update conversation title
         conversation.title = title
@@ -513,6 +500,36 @@ async def generate_conversation_title(conversation: Conversation) -> Optional[st
     except Exception as e:
         logger.error(f"Error generating conversation title: {e}")
         return None
+
+
+@router.delete("/all", response_model=dict)
+async def delete_all_conversations():
+    """Delete all conversations."""
+    try:
+        # Find all conversations for the current user
+        conversations = await Conversation.find().to_list()
+
+        # Delete all messages for each conversation
+        for conversation in conversations:
+            # Get and delete all messages for this conversation
+            messages = await conversation.get_messages()
+            for message in messages:
+                await message.delete()
+
+            # Delete the conversation itself
+            await conversation.delete()
+
+        return {
+            "message": "All conversations deleted successfully",
+            "count": len(conversations),
+        }
+
+    except Exception as e:
+        logger.error(f"Error deleting all conversations: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error deleting all conversations: {str(e)}",
+        )
 
 
 # @router.post("/{conversation_id}/migrate", response_model=ConversationResponse)

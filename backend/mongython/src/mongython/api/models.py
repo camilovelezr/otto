@@ -10,6 +10,9 @@ import httpx
 from mongython.models.llm_model import LLMModel
 from mongython.api.users import get_current_user
 from mongython.models.user import User
+from dotenv import load_dotenv, find_dotenv
+
+load_dotenv(find_dotenv())
 
 router = APIRouter(
     prefix="/models",
@@ -18,7 +21,8 @@ router = APIRouter(
 
 logger = logging.getLogger(__name__)
 
-INTERNAL_API_URL = os.getenv("INTERNAL_API_URL")
+LITELLM_URL = os.getenv("LITELLM_URL")
+logger.info(f"LITELLM_URL: {LITELLM_URL}")
 
 
 class ModelUpdateRequest(BaseModel):
@@ -74,7 +78,7 @@ async def update_model(model_id: str, update_data: ModelUpdateRequest):
 
 
 @router.post("/sync", response_model=List[LLMModel])
-async def sync_models_from_litellm(user_id: Optional[str] = None):
+async def sync_models_from_litellm():
     """Sync model metadata from LiteLLM API
 
     Args:
@@ -87,24 +91,12 @@ async def sync_models_from_litellm(user_id: Optional[str] = None):
 
     headers = {"Authorization": f"Bearer {LITELLM_MASTER_KEY}"}
 
-    # If a user_id is provided, log the user info but still use master key for LiteLLM
-    if user_id:
-        from mongython.models.user import User
-
-        # Try to find the user using Beanie's get method
-        try:
-            user = await User.get(user_id)
-            logger.info(f"User: {user}")
-            # We'll use the master key instead of user token for this admin operation
-        except Exception as e:
-            logger.error(f"Error finding user with ID {user_id}: {e}")
-
     try:
-        async with httpx.AsyncClient(base_url=INTERNAL_API_URL) as client:
+        async with httpx.AsyncClient(base_url=LITELLM_URL) as client:
             response = await client.get(
-                "/litellm/v1/model/info",
+                "/v1/model/info",
                 headers=headers,
-                timeout=10.0,
+                timeout=60.0,
             )
 
             if response.status_code != 200:
@@ -114,6 +106,7 @@ async def sync_models_from_litellm(user_id: Optional[str] = None):
                 )
 
             model_data = response.json()
+            logger.info(f"Model data: {model_data}")
             models = []
 
             # Process each model
@@ -128,7 +121,7 @@ async def sync_models_from_litellm(user_id: Optional[str] = None):
 
                 if existing_model:
                     # Update existing model fields
-                    for field in existing_model.__fields__:
+                    for field in existing_model.model_fields:
                         if field != "id" and hasattr(new_model, field):
                             setattr(existing_model, field, getattr(new_model, field))
 

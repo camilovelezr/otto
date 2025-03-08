@@ -44,7 +44,6 @@ class LLMModel {
   final String provider;
   final int maxInputTokens;
   final int maxOutputTokens;
-  final int maxTotalTokens;
   final double inputPricePerToken;
   final double outputPricePerToken;
   final ModelCapabilities capabilities;
@@ -56,7 +55,6 @@ class LLMModel {
     required this.provider,
     this.maxInputTokens = 4096,
     this.maxOutputTokens = 4096,
-    this.maxTotalTokens = 8192,
     this.inputPricePerToken = 0.0,
     this.outputPricePerToken = 0.0,
     ModelCapabilities? capabilities,
@@ -72,7 +70,6 @@ class LLMModel {
       provider: json['provider'],
       maxInputTokens: json['max_input_tokens'] ?? 4096,
       maxOutputTokens: json['max_output_tokens'] ?? 4096,
-      maxTotalTokens: json['max_total_tokens'] ?? 8192,
       inputPricePerToken: json['input_price_per_token']?.toDouble() ?? 0.0,
       outputPricePerToken: json['output_price_per_token']?.toDouble() ?? 0.0,
       capabilities: json['capabilities'] != null 
@@ -90,7 +87,6 @@ class LLMModel {
     'provider': provider,
     'max_input_tokens': maxInputTokens,
     'max_output_tokens': maxOutputTokens,
-    'max_total_tokens': maxTotalTokens,
     'input_price_per_token': inputPricePerToken,
     'output_price_per_token': outputPricePerToken,
     'capabilities': capabilities.toJson(),
@@ -104,7 +100,6 @@ class LLMModel {
     String? provider,
     int? maxInputTokens,
     int? maxOutputTokens,
-    int? maxTotalTokens,
     double? inputPricePerToken,
     double? outputPricePerToken,
     ModelCapabilities? capabilities,
@@ -116,7 +111,6 @@ class LLMModel {
       provider: provider ?? this.provider,
       maxInputTokens: maxInputTokens ?? this.maxInputTokens,
       maxOutputTokens: maxOutputTokens ?? this.maxOutputTokens,
-      maxTotalTokens: maxTotalTokens ?? this.maxTotalTokens,
       inputPricePerToken: inputPricePerToken ?? this.inputPricePerToken,
       outputPricePerToken: outputPricePerToken ?? this.outputPricePerToken,
       capabilities: capabilities ?? this.capabilities,
@@ -136,6 +130,9 @@ class LLMModel {
   double calculateTotalCost(int inputTokens, int outputTokens) {
     return calculateInputCost(inputTokens) + calculateOutputCost(outputTokens);
   }
+  
+  // Get context window size (use maxInputTokens as the context window)
+  int get contextWindowSize => maxInputTokens;
 
   // Format the cost as a user-friendly string
   static String formatCost(double cost) {

@@ -7,19 +7,19 @@ from beanie import Document, Indexed
 class ModelCapabilities(BaseModel):
     """Capabilities of an LLM model"""
 
-    supports_system_messages: bool = False
-    supports_vision: bool = False
-    supports_function_calling: bool = False
-    supports_tool_choice: bool = False
-    supports_streaming: bool = True
-    supports_response_format: bool = False
-    supports_assistant_prefill: bool = False
-    supports_prompt_caching: bool = False
-    supports_audio_input: bool = False
-    supports_audio_output: bool = False
-    supports_pdf_input: bool = False
-    supports_embedding_image_input: bool = False
-    supports_response_schema: bool = False
+    supports_system_messages: Optional[bool] = None
+    supports_vision: Optional[bool] = None
+    supports_function_calling: Optional[bool] = None
+    supports_tool_choice: Optional[bool] = None
+    supports_streaming: Optional[bool] = None
+    supports_response_format: Optional[bool] = None
+    supports_assistant_prefill: Optional[bool] = None
+    supports_prompt_caching: Optional[bool] = None
+    supports_audio_input: Optional[bool] = None
+    supports_audio_output: Optional[bool] = None
+    supports_pdf_input: Optional[bool] = None
+    supports_embedding_image_input: Optional[bool] = None
+    supports_response_schema: Optional[bool] = None
 
 
 class LLMModel(Document):
@@ -35,9 +35,8 @@ class LLMModel(Document):
     )
 
     # Token information
-    max_input_tokens: int = 4096
-    max_output_tokens: int = 4096
-    max_total_tokens: int = 8192
+    max_input_tokens: Optional[int] = None
+    max_output_tokens: Optional[int] = None
 
     # Pricing (in USD)
     input_price_per_token: float = 0.0  # Price per token
@@ -58,10 +57,6 @@ class LLMModel(Document):
 
     # When this model was last synced
     last_synced: datetime = Field(default_factory=datetime.now)
-
-    # Model performance metrics (to be updated over time)
-    avg_tokens_per_second: Optional[float] = None
-    avg_latency_ms: Optional[int] = None
 
     class Settings:
         name = "llm_models"
@@ -128,9 +123,8 @@ class LLMModel(Document):
             provider=provider,
             provider_model_id=provider_model_id,
             # Token information
-            max_input_tokens=info.get("max_input_tokens", 4096),
-            max_output_tokens=info.get("max_output_tokens", 4096),
-            max_total_tokens=info.get("max_tokens", 8192),
+            max_input_tokens=info.get("max_input_tokens", None),
+            max_output_tokens=info.get("max_output_tokens", None),
             # Pricing
             input_price_per_token=info.get("input_cost_per_token", 0.0),
             output_price_per_token=info.get("output_cost_per_token", 0.0),

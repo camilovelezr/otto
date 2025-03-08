@@ -5,6 +5,24 @@ import '../theme/theme_provider.dart';
 import '../theme/app_spacing.dart';
 import 'dart:ui' as ui show BoxHeightStyle, BoxWidthStyle;
 
+// Custom formatter to handle Enter key
+class EnterKeyFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    // Remove any standalone newline characters that aren't preceded by Shift
+    if (newValue.text.endsWith('\n') && 
+        !oldValue.text.endsWith('\n') &&
+        newValue.text.length == oldValue.text.length + 1) {
+      // If a newline was just added (and not from a paste operation)
+      return oldValue;
+    }
+    return newValue;
+  }
+}
+
 class MessageInput extends StatefulWidget {
   final Function(String) onSubmit;
   final bool isLoading;
@@ -48,10 +66,27 @@ class _MessageInputState extends State<MessageInput> {
     final text = _controller.text.trim();
     if (text.isEmpty || widget.isLoading) return;
 
-    widget.onSubmit(text);
-    // Reset the controller with empty text and cursor at the start
-    _controller.text = '';
-    _focusNode.requestFocus();
+    debugPrint('Submitting message: ${text.substring(0, text.length > 20 ? 20 : text.length)}...');
+    
+    try {
+      widget.onSubmit(text);
+      // Clear the text field completely by replacing its value
+      // This approach ensures a clean slate without any hidden newlines
+      _controller.value = TextEditingValue.empty;
+      
+      // Make sure we have focus after sending
+      _focusNode.requestFocus();
+      debugPrint('Message submitted successfully');
+    } catch (e) {
+      debugPrint('Error sending message: $e');
+      // Show a snackbar to inform the user
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to send message: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   @override
@@ -78,10 +113,11 @@ class _MessageInputState extends State<MessageInput> {
                     final bool isEnterPressed = event.logicalKey == LogicalKeyboardKey.enter;
                     final bool isShiftPressed = event.isShiftPressed;
 
-                    if (isEnterPressed) {
-                      if (!isShiftPressed) {
-                        _handleSubmit();
-                      }
+                    if (isEnterPressed && !isShiftPressed) {
+                      // Prevent default newline insertion
+                      _handleSubmit();
+                      // Returning here to prevent default action (which would be inserting a newline)
+                      return;
                     }
                   }
                 },
@@ -90,13 +126,20 @@ class _MessageInputState extends State<MessageInput> {
                   focusNode: _focusNode,
                   maxLines: 6,
                   minLines: 1,
-                  textInputAction: TextInputAction.newline,
+                  textInputAction: TextInputAction.send,
                   keyboardType: TextInputType.multiline,
                   onChanged: (text) {
-                    // Only rebuild if text is not empty (avoid empty line height)
-                    if (text.isNotEmpty) {
-                      setState(() {});
-                    }
+                    setState(() {});
+                  },
+                  onSubmitted: (text) {
+                    // This is triggered when the user presses Enter in single line mode
+                    // or when TextInputAction.send is triggered
+                    debugPrint('TextField onSubmitted triggered');
+                    _handleSubmit();
+                  },
+                  onEditingComplete: () {
+                    // This can help with handling Enter key on some platforms
+                    _handleSubmit();
                   },
                   onTapOutside: (event) => _focusNode.unfocus(),
                   autofocus: false,
@@ -107,17 +150,11 @@ class _MessageInputState extends State<MessageInput> {
                   style: theme.textTheme.bodyLarge?.copyWith(
                     height: 1.5,
                   ),
+                  // Simplified input formatters to avoid potential issues
                   inputFormatters: [
-                    TextInputFormatter.withFunction((oldValue, newValue) {
-                      // Only prevent newlines when they're not from shift+enter
-                      if (newValue.text.endsWith('\n') && 
-                          oldValue.text == newValue.text.substring(0, newValue.text.length - 1) &&
-                          !RawKeyboard.instance.keysPressed.contains(LogicalKeyboardKey.shiftLeft) &&
-                          !RawKeyboard.instance.keysPressed.contains(LogicalKeyboardKey.shiftRight)) {
-                        return oldValue;
-                      }
-                      return newValue;
-                    }),
+                    // This prevents standalone Enter keys from adding newlines
+                    // but still allows Shift+Enter and pasted text with newlines
+                    EnterKeyFormatter(),
                   ],
                   decoration: InputDecoration(
                     hintText: 'Type a message...',
@@ -145,54 +182,57 @@ class _MessageInputState extends State<MessageInput> {
             ),
           ),
           SizedBox(width: AppSpacing.inlineSpacing),
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  theme.colorScheme.primary,
-                  Color.lerp(
+          GestureDetector(
+            onTap: widget.isLoading ? null : _handleSubmit,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
                     theme.colorScheme.primary,
-                    theme.colorScheme.secondary,
-                    0.3,
-                  )!,
+                    Color.lerp(
+                      theme.colorScheme.primary,
+                      theme.colorScheme.secondary,
+                      0.3,
+                    )!,
+                  ],
+                ),
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: [
+                  BoxShadow(
+                    color: theme.colorScheme.primary.withOpacity(0.15),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                    spreadRadius: 0,
+                  ),
                 ],
               ),
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: theme.colorScheme.primary.withOpacity(0.15),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
-                  spreadRadius: 0,
-                ),
-              ],
-            ),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: widget.isLoading ? null : _handleSubmit,
-                borderRadius: BorderRadius.circular(16),
-                child: Container(
-                  padding: EdgeInsets.all(AppSpacing.inlineSpacing + 2),
-                  child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 200),
-                    child: widget.isLoading
-                        ? SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: widget.isLoading ? null : _handleSubmit,
+                  borderRadius: BorderRadius.circular(16),
+                  child: Container(
+                    padding: EdgeInsets.all(AppSpacing.inlineSpacing + 2),
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 200),
+                      child: widget.isLoading
+                          ? SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                              ),
+                            )
+                          : const Icon(
+                              Icons.send_rounded,
+                              color: Colors.white,
+                              size: 20,
                             ),
-                          )
-                        : const Icon(
-                            Icons.send_rounded,
-                            color: Colors.white,
-                            size: 20,
-                          ),
+                    ),
                   ),
                 ),
               ),

@@ -68,6 +68,33 @@ class AuthProvider extends ChangeNotifier {
     _error = errorMessage;
   }
   
+  // Load models after login (renamed from _syncModelsAfterLogin)
+  Future<void> _loadModelsAfterLogin() async {
+    try {
+      if (currentUser != null) {
+        // Only use the /models/list endpoint to fetch models
+        final models = await _modelService.getModels();
+        
+        if (models.isNotEmpty) {
+          debugPrint('Successfully fetched ${models.length} models after login');
+        } else {
+          // If first attempt returns no models, try once more after a short delay
+          await Future.delayed(Duration(milliseconds: 500));
+          final retryModels = await _modelService.getModels();
+          
+          if (retryModels.isNotEmpty) {
+            debugPrint('Successfully fetched ${retryModels.length} models on retry after login');
+          } else {
+            debugPrint('No models available after login attempts');
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Error loading models after login: $e');
+      // Don't show the error to the user as this is a background operation
+    }
+  }
+  
   // Login with username and password
   Future<bool> login(String username, String password) async {
     _isLoading = true;
@@ -79,11 +106,11 @@ class AuthProvider extends ChangeNotifier {
       _isLoading = false;
       notifyListeners();
       
-      // After successful login, trigger model sync if we have a user ID
-      if (currentUser != null && currentUser!.id != null) {
-        debugPrint('Login successful, syncing models for user: ${currentUser!.id}');
-        // Run model sync in the background to not block the UI
-        _syncModelsAfterLogin();
+      // After successful login, load models
+      if (currentUser != null) {
+        debugPrint('Login successful, loading models for user: ${currentUser!.id}');
+        // Run model loading in the background to not block the UI
+        _loadModelsAfterLogin();
       }
       
       return true;
@@ -92,23 +119,6 @@ class AuthProvider extends ChangeNotifier {
       _setError(e);
       notifyListeners();
       return false;
-    }
-  }
-  
-  // Sync models in the background after login
-  Future<void> _syncModelsAfterLogin() async {
-    try {
-      if (currentUser != null) {
-        // Pass both ID and username for more reliable authentication
-        await _modelService.syncModels(
-          userId: currentUser!.id?.toString() ?? '',
-          username: currentUser!.username,
-        );
-        debugPrint('Synced models using username: ${currentUser!.username}');
-      }
-    } catch (e) {
-      debugPrint('Error syncing models after login: $e');
-      // Don't show the error to the user as this is a background operation
     }
   }
   
@@ -123,11 +133,11 @@ class AuthProvider extends ChangeNotifier {
       _isLoading = false;
       notifyListeners();
       
-      // After successful registration, trigger model sync if we have a user ID
-      if (currentUser != null && currentUser!.id != null) {
-        debugPrint('Registration successful, syncing models for user: ${currentUser!.id}');
-        // Run model sync in the background to not block the UI
-        _syncModelsAfterLogin();
+      // After successful registration, load models
+      if (currentUser != null) {
+        debugPrint('Registration successful, loading models for user: ${currentUser!.id}');
+        // Run model loading in the background to not block the UI
+        _loadModelsAfterLogin();
       }
       
       return true;

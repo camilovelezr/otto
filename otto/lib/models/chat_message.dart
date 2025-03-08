@@ -10,8 +10,7 @@ class ChatMessage {
   final DateTime createdAt; // Add this to match backend API
   final int? tokenCount;
   
-  // Metadata can store additional information like latency, token counts, etc.
-  final Map<String, dynamic>? metadata;
+  // metadata field has been removed as per backend updates
 
   ChatMessage({
     String? id,
@@ -21,7 +20,6 @@ class ChatMessage {
     DateTime? timestamp,
     DateTime? createdAt,
     this.tokenCount,
-    this.metadata,
   }) : 
     id = id ?? const Uuid().v4(),
     timestamp = timestamp ?? DateTime.now(),
@@ -56,7 +54,6 @@ class ChatMessage {
           ? parseDateTime(json['timestamp'] as String) 
           : parseDateTime(json['created_at'] as String?),
       tokenCount: json['token_count'] as int?,
-      metadata: json['metadata'] as Map<String, dynamic>?,
     );
   }
 
@@ -69,7 +66,6 @@ class ChatMessage {
       'created_at': createdAt.toIso8601String(),
       'timestamp': timestamp.toIso8601String(),
       'token_count': tokenCount,
-      'metadata': metadata ?? {},
     };
   }
 

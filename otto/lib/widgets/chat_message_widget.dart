@@ -486,10 +486,18 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
                                             );
                                           } else {
                                             // For assistant messages, we use our enhanced SelectableMarkdown
-                                            String content = widget.isStreaming 
-                                                ? widget.streamedContent 
-                                                : widget.message.content;
-                                                
+                                            String content;
+                                            
+                                            if (widget.isStreaming) {
+                                              // When streaming, only use the streamed content
+                                              content = widget.streamedContent;
+                                              debugPrint('Using streaming content: ${content.length} chars'); 
+                                            } else {
+                                              // When not streaming, only use the message's content
+                                              content = widget.message.content;
+                                              debugPrint('Using message content: ${content.length} chars');
+                                            }
+                                            
                                             // Preprocess markdown content
                                             content = content.replaceAllMapped(
                                               RegExp(r'<[^>]+>'),

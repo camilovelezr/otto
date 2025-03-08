@@ -7,7 +7,9 @@ import '../config/env_config.dart';  // Add import for EnvConfig
 import 'chat_service.dart';
 import 'model_service.dart';
 import 'dart:convert'; // Add this import for JSON handling
+import 'dart:math' show min; // Import min function
 import 'dart:math' as math;
+import 'dart:async';
 
 class ChatProvider with ChangeNotifier {
   final ChatService _chatService;
@@ -20,8 +22,8 @@ class ChatProvider with ChangeNotifier {
   String? _error;
   String _currentStreamedResponse = '';
   String? _currentConversationId;
-  String? _currentUserId = 'default_user'; // In a real app, this would come from auth
-  String? _currentUserName = 'default_user'; // Username for authentication
+  String? _currentUserId;
+  String? _currentUserName;
   static const String _selectedModelKey = 'selected_model';
   
   // Token and cost tracking
@@ -29,6 +31,10 @@ class ChatProvider with ChangeNotifier {
   int _totalOutputTokens = 0;
   double _totalCost = 0.0;
   Map<String, LLMModel> _modelCache = {};
+
+  // Stream communication
+  StreamController<String>? _streamController;
+  StreamSubscription<String>? _streamSubscription;
 
   ChatProvider({ChatService? chatService}) : _chatService = chatService ?? ChatService();
 
@@ -52,6 +58,13 @@ class ChatProvider with ChangeNotifier {
     notifyListeners();
   }
   
+  // Set error message and notify listeners
+  void setError(String errorMessage) {
+    _error = errorMessage;
+    _isLoading = false;
+    notifyListeners();
+  }
+  
   // Clear token and cost tracking
   void resetTokenAndCostTracking() {
     _totalInputTokens = 0;
@@ -68,49 +81,39 @@ class ChatProvider with ChangeNotifier {
       _isLoadingModels = true; // Use the dedicated model loading flag
       notifyListeners();
       
-      debugPrint('Initializing chat provider with backend sync: $syncModelsWithBackend');
+      debugPrint('Initializing chat provider');
       debugPrint('Using backend URL: ${EnvConfig.backendUrl}');
       
       // Then perform the actual initialization asynchronously
       await Future.microtask(() async {
-        // If requested, sync models with backend first
-        if (syncModelsWithBackend) {
-          debugPrint('Syncing models with backend...');
-          final userId = _ensureValidUserId();
-          final username = _currentUserName ?? ''; // Get current username if available
-          
-          // Now fetching models from the /models/list endpoint
-          try {
-            debugPrint('Syncing models with userId: $userId and username: $username');
-            final syncedModels = await _modelService.syncModels(
-              userId: userId,
-              username: username,
-            );
-            
-            if (syncedModels.isNotEmpty) {
-              debugPrint('Synced ${syncedModels.length} models from backend');
-              _availableModels = syncedModels;
-            } else {
-              debugPrint('No models returned from backend, will attempt to load from backup');
-            }
-          } catch (e) {
-            debugPrint('Error syncing models with backend: $e');
-            // Continue with initialization even if sync fails
-          }
-        }
-        
-        // Load models from the backend with timeout to avoid hanging
+        // Load models from backend
         try {
-          await loadModels().timeout(Duration(seconds: 10), onTimeout: () {
-            debugPrint('Model loading timed out after 10 seconds');
-            // Allow app to proceed with empty model list rather than hanging
-            return;
-          });
+          debugPrint('Fetching models from backend...');
+          // Always use the /models/list endpoint
+          final models = await _modelService.getModels();
+          
+          if (models.isNotEmpty) {
+            debugPrint('Fetched ${models.length} models from backend');
+            _availableModels = models;
+          } else {
+            debugPrint('No models returned from backend, retrying once...');
+            // Try again once more after a short delay
+            await Future.delayed(Duration(milliseconds: 500));
+            final retryModels = await _modelService.getModels();
+            
+            if (retryModels.isNotEmpty) {
+              debugPrint('Fetched ${retryModels.length} models on retry');
+              _availableModels = retryModels;
+            } else {
+              debugPrint('Still no models after retry');
+            }
+          }
         } catch (e) {
-          debugPrint('Error loading models, but continuing initialization: $e');
-          // Continue initialization even if model loading fails
+          debugPrint('Error fetching models from backend: $e');
+          // Continue with initialization even if fetch fails
         }
         
+        // Ensure we have a conversation
         try {
           await _ensureConversationExists();
         } catch (e) {
@@ -136,6 +139,7 @@ class ChatProvider with ChangeNotifier {
   // Clear the current chat and start fresh
   Future<void> clearChat() async {
     _messages = [];
+    _error = null; // Explicitly clear any error messages
     resetTokenAndCostTracking();
     // Create a new conversation
     _currentConversationId = null;
@@ -149,12 +153,24 @@ class ChatProvider with ChangeNotifier {
       try {
         // Use helper method to ensure valid user ID
         final userId = _ensureValidUserId();
-        _currentConversationId = await _chatService.createConversation(userId);
-        debugPrint('Created new conversation: $_currentConversationId');
+        debugPrint('Creating new conversation for user: $userId');
+        
+        // Create a new conversation and wait for the result
+        final conversationId = await _chatService.createConversation(userId);
+        
+        if (conversationId == null || conversationId.isEmpty) {
+          throw Exception('Backend returned empty conversation ID');
+        }
+        
+        _currentConversationId = conversationId;
+        debugPrint('Created new conversation with ID: $_currentConversationId');
       } catch (e) {
         debugPrint('Error creating conversation: $e');
-        // Continue without server persistence if we couldn't create a conversation
+        // Rethrow the exception to be handled by the caller
+        throw Exception('Failed to create conversation: $e');
       }
+    } else {
+      debugPrint('Using existing conversation: $_currentConversationId');
     }
   }
 
@@ -248,8 +264,8 @@ class ChatProvider with ChangeNotifier {
       
       debugPrint('Saved model ID from preferences: $savedModelId');
       
-      // Try to get models from the backend
-      debugPrint('Fetching models from backend...');
+      // Try to get models from the backend using only the /models/list endpoint
+      debugPrint('Fetching models from /models/list endpoint...');
       try {
         _availableModels = await _modelService.getModels().timeout(
           Duration(seconds: 8),
@@ -288,25 +304,25 @@ class ChatProvider with ChangeNotifier {
           debugPrint('No saved model, using first model from backend: ${_selectedModel!.displayName}');
         }
       } else {
-        // No models returned from backend, try direct sync once as a last resort
-        debugPrint('No models returned from backend, trying direct sync with /models/list endpoint...');
+        // No models returned, try one more time after a short delay
+        debugPrint('No models returned, retrying fetch from /models/list endpoint...');
+        
+        await Future.delayed(Duration(milliseconds: 500));
         
         try {
-          final syncedModels = await _modelService.syncModels(
-            userId: _ensureValidUserId()
-          ).timeout(Duration(seconds: 5), onTimeout: () {
-            debugPrint('Model sync timed out after 5 seconds');
+          final modelsList = await _modelService.getModels().timeout(Duration(seconds: 5), onTimeout: () {
+            debugPrint('Model fetch timed out after 5 seconds');
             return [];
           });
           
-          if (syncedModels.isNotEmpty) {
+          if (modelsList.isNotEmpty) {
             gotModels = true;
-            _availableModels = syncedModels;
-            debugPrint('Successfully fetched ${syncedModels.length} models from /models/list endpoint');
+            _availableModels = modelsList;
+            debugPrint('Successfully fetched ${modelsList.length} models on retry');
             
-            // Use the first model from synced models
+            // Use the first model from fetched models
             _selectedModel = _availableModels.first;
-            debugPrint('Using model from direct fetch: ${_selectedModel!.displayName}');
+            debugPrint('Using model from backend: ${_selectedModel!.displayName}');
           } else {
             // Try to use saved model from preferences as a last resort
             if (savedModelJson != null) {
@@ -327,7 +343,7 @@ class ChatProvider with ChangeNotifier {
             }
           }
         } catch (e) {
-          debugPrint('Error syncing models: $e');
+          debugPrint('Error fetching models on retry: $e');
         }
       }
     } catch (e) {
@@ -435,6 +451,8 @@ class ChatProvider with ChangeNotifier {
       content: content,
     );
     
+    debugPrint('Adding user message: "${content.substring(0, min(20, content.length))}..." to conversation');
+    
     // Add to local state
     _messages.add(message);
     notifyListeners();
@@ -442,249 +460,236 @@ class ChatProvider with ChangeNotifier {
     // Update token usage
     _updateTokenUsage(message, isInput: true);
     
-    // Get valid user ID
-    final userId = _ensureValidUserId();
-    
-    // Persist to backend
-    try {
-      await _chatService.addMessageToConversation(
-        _currentConversationId!, 
-        message,
-        userId: userId
-      );
-      debugPrint('Successfully persisted user message to backend');
-    } catch (e) {
-      debugPrint('Error persisting user message: $e');
-      // Continue anyway, as the message is already in local state
-    }
+    debugPrint('Current message count before sending to API: ${_messages.length}');
     
     // Now send the message to the AI
     await sendMessage(content);
   }
   
-  Future<void> sendMessage(String content) async {
-    // Store the previous error to restore it if needed
-    final previousError = _error;
-    
-    if (_selectedModel == null) {
-      _error = 'Please select a model first';
-      notifyListeners();
-      return;
-    }
-
-    if (content.trim().isEmpty) {
-      return;
-    }
-    
-    // Make sure we have a valid model before sending the message
-    if (_availableModels.isEmpty) {
-      debugPrint('No models available, attempting to load models first');
-      _isLoadingModels = true; // Use the dedicated model loading flag instead of _isLoading
-      notifyListeners();
+  Future<void> sendMessage(String content, {
+    bool useStream = true,
+    double? temperature,
+    int? maxTokens,
+  }) async {
+    try {
+      // Clear any previous error messages when sending a new message
+      _error = null;
       
-      try {
-        await loadModels().timeout(Duration(seconds: 5), onTimeout: () {
-          debugPrint('Model loading timed out after 5 seconds');
-          return;
-        });
-      } catch (e) {
-        debugPrint('Error loading models: $e');
-      } finally {
-        _isLoadingModels = false; // Use the dedicated model loading flag
-        notifyListeners();
+      // Validate that we have everything needed to send a message
+      if (content.trim().isEmpty) {
+        debugPrint('Cannot send empty message');
+        return;
       }
       
-      if (_availableModels.isEmpty || _selectedModel == null) {
-        _error = 'Could not load models. Please check your connection and try again.';
+      if (_selectedModel == null) {
+        debugPrint('No model selected');
+        _error = 'Please select a model before sending a message';
         notifyListeners();
         return;
       }
-    }
-    
-    // DEBUG: Print current messages state
-    debugPrint('Current messages before processing: ${_messages.length}');
-    for (int i = 0; i < _messages.length; i++) {
-      final msg = _messages[i];
-      debugPrint(' - Message ${i+1}: ${msg.role}: ${msg.content.substring(0, math.min(20, msg.content.length))}...');
-    }
-
-    // Create a temporary assistant message for streaming
-    var tempMessage = ChatMessage(
-      role: 'assistant',
-      content: '',
-      model: _selectedModel,
-    );
-    
-    // Make a copy of the messages BEFORE adding the temporary message
-    // This ensures we have the user message but not the temporary assistant message
-    final messageHistory = List<ChatMessage>.from(_messages);
-    
-    // If messageHistory is empty but content is provided, this is likely the first message
-    // In this case, we need to create a user message and add it to the history
-    if (messageHistory.isEmpty && content.isNotEmpty) {
-      debugPrint('No messages in history but content provided. Creating user message for first interaction.');
-      final initialUserMessage = ChatMessage(
-        role: 'user',
-        content: content,
-      );
       
-      // Add to both message history (for LLM context) and _messages (for UI display)
-      messageHistory.add(initialUserMessage);
-      
-      // Only add to _messages if it's not already there
-      if (_messages.isEmpty) {
-        _messages.add(initialUserMessage);
+      // Check if we have an active conversation ID
+      await _ensureConversationExists();
+      if (_currentConversationId == null) {
+        debugPrint('Failed to get a valid conversation ID');
+        _error = 'Could not create a conversation. Please try again.';
         notifyListeners();
+        return;
       }
-    }
-    
-    // Now add the temporary message to _messages for UI updates
-    _messages.add(tempMessage);
-    
-    _isLoading = true;
-    _currentStreamedResponse = '';
-    _error = null;
-    notifyListeners();
-
-    // Use a timeout for the entire operation to prevent hanging
-    try {
-      await Future.microtask(() async {
-        StringBuffer accumulatedContent = StringBuffer();
-        
-        // Get valid user ID
-        final userId = _ensureValidUserId();
-        
-        // Sort by timestamp to maintain proper conversation context
-        // This ensures the LLM gets messages in chronological order
-        messageHistory.sort((a, b) => a.createdAt.compareTo(b.createdAt));
-        
-        // Log the conversation context for debugging
-        debugPrint('Sending ${messageHistory.length} messages to LLM in conversation $_currentConversationId');
-        for (int i = 0; i < messageHistory.length; i++) {
-          final msg = messageHistory[i];
-          debugPrint('Message ${i+1}: ${msg.role}: ${msg.content.length > 30 ? '${msg.content.substring(0, 30)}...' : msg.content}');
+      
+      // Get a copy of message history for the API request
+      final apiMessageHistory = List<ChatMessage>.from(_messages);
+      
+      // Log the message count and roles
+      debugPrint('Message count being sent to API: ${apiMessageHistory.length}');
+      for (int i = 0; i < apiMessageHistory.length; i++) {
+        final msg = apiMessageHistory[i];
+        debugPrint('Message $i - Role: ${msg.role}, Content: "${msg.content.substring(0, min(20, msg.content.length))}..."');
+      }
+      
+      // Validate we have at least one message to send
+      if (apiMessageHistory.isEmpty) {
+        debugPrint('ERROR: No messages to send to API');
+        _error = 'No messages to send. Please try again.';
+        notifyListeners();
+        return;
+      }
+      
+      // For UI purposes, add a temporary message that won't be sent to the API
+      final tempAssistantMessage = ChatMessage(
+        role: 'assistant',
+        content: '',
+        model: _selectedModel,
+      );
+      _messages.add(tempAssistantMessage);
+      
+      // Important: Reset the streamed response buffer for the new message
+      _currentStreamedResponse = '';
+      
+      notifyListeners(); // Notify UI to show the placeholder
+      
+      // Debug: print messages state for debugging (just roles and shortened content)
+      debugPrint('Sending messages to API:');
+      for (final msg in apiMessageHistory) {
+        final contentPreview = msg.content.length > 20 
+            ? '${msg.content.substring(0, 20)}...' 
+            : msg.content;
+        debugPrint('  ${msg.role}: $contentPreview');
+      }
+      
+      // Make sure any previous stream subscription is closed
+      if (_streamSubscription != null) {
+        await _streamSubscription!.cancel();
+        _streamSubscription = null;
+      }
+      
+      // Create a stream controller to handle the streaming response
+      _streamController = StreamController<String>();
+      
+      try {
+        // Use stream to get incremental responses from the AI
+        debugPrint('Starting stream chat request with conversation ID: $_currentConversationId');
+        if (maxTokens != null) {
+          debugPrint('Using max_input_tokens: $maxTokens');
         }
         
-        // Verify we're not sending an empty list
-        if (messageHistory.isEmpty) {
-          debugPrint('ERROR: No messages to send to LLM. This should not happen.');
-          _error = 'Error: No messages to send to the model.';
-          _isLoading = false;
-          notifyListeners();
-          return;
-        }
+        // Ensure we use a proper model identifier, not the hash
+        // Get the display name or a fallback model name (like 'gpt-3.5-turbo')
+        final String modelForApi = _selectedModel!.displayName.isNotEmpty 
+            ? _selectedModel!.displayName 
+            : _selectedModel!.modelId.contains('-') 
+                ? _selectedModel!.modelId 
+                : 'gpt-3.5-turbo'; // Fallback to a safe default
         
-        // Send the message history to the LLM (without the temporary message)
-        try {
-          await for (final chunk in _chatService.streamChat(
-            _selectedModel!.modelId,
-            messageHistory, // Already excludes the temporary message
-            userId: userId
-          )) {
-            // Add the chunk to accumulated content
-            accumulatedContent.write(chunk);
-            _currentStreamedResponse = accumulatedContent.toString();
-            
-            // Update the message with the accumulated content
-            final updatedMessage = ChatMessage(
-              role: 'assistant',
-              content: _currentStreamedResponse,
-              id: tempMessage.id,
-              timestamp: tempMessage.timestamp,
-              createdAt: tempMessage.createdAt,
-              model: _selectedModel,
-            );
-            
-            // Update the message in the list and notify listeners immediately
-            _messages[_messages.length - 1] = updatedMessage;
-            notifyListeners();
-          }
-        } catch (e) {
-          debugPrint('Error during streaming: $e');
-          // Continue with processing to ensure we don't get stuck
-          _error = 'Error receiving response: $e';
-        }
+        debugPrint('Using model for API request: $modelForApi');
         
-        // If we got any response, finalize it
-        if (accumulatedContent.isNotEmpty) {
-          // Ensure final state is reflected
-          final finalMessage = ChatMessage(
-            role: 'assistant',
-            content: _currentStreamedResponse,
-            id: tempMessage.id,
-            timestamp: tempMessage.timestamp,
-            createdAt: DateTime.now(),  // Update with final timestamp
-            model: _selectedModel,
-          );
-          _messages[_messages.length - 1] = finalMessage;
-          
-          // Track token usage for the complete response
-          _updateTokenUsage(finalMessage, isInput: false);
-          
-          // Persist the assistant's message to backend (reuse the userId from above)
-          try {
-            await _chatService.addMessageToConversation(
-              _currentConversationId!, 
-              finalMessage,
-              userId: userId
-            );
-            debugPrint('Successfully persisted assistant message to backend');
-          } catch (e) {
-            debugPrint('Warning: Failed to persist assistant message to backend: $e');
-            // Continue without server persistence if we couldn't save the message
-          }
-          
-          // Update conversation title if this is the second message or later
-          if (_messages.length >= 3 && _currentConversationId != null) {
-            await _updateConversationTitle().timeout(Duration(seconds: 5), onTimeout: () {
-              debugPrint('Update conversation title timed out');
+        // Print selectedModel details for debugging
+        debugPrint('Selected model details:');
+        debugPrint('  modelId: ${_selectedModel!.modelId}');
+        debugPrint('  displayName: ${_selectedModel!.displayName}');
+        debugPrint('  provider: ${_selectedModel!.provider}');
+        
+        final stream = _chatService.streamChat(
+          modelForApi,
+          apiMessageHistory, // Use the list without the empty assistant message
+          userId: _ensureValidUserId(),
+          conversationId: _currentConversationId,
+          temperature: temperature,
+          maxTokens: maxTokens,
+        );
+        
+        _streamSubscription = stream.listen(
+          (chunk) {
+            // Special handling for error messages marked with *ERROR_MESSAGE* prefix
+            if (chunk.startsWith("*ERROR_MESSAGE*")) {
+              // Extract the actual error message
+              final errorMessage = chunk.substring("*ERROR_MESSAGE*".length);
+              
+              // Set the error state but don't add it to the message history
+              setError(errorMessage);
+              
+              // Remove the last (empty) assistant message since we got an error
+              if (_messages.isNotEmpty && _messages.last.role == 'assistant' && _messages.last.content.isEmpty) {
+                _messages.removeLast();
+                notifyListeners();
+              }
+              
+              // Instead of break, just return early from this callback
               return;
-            });
-          }
-        } else if (_currentStreamedResponse.isEmpty) {
-          // If we didn't get any response, update the message to indicate error
-          final errorMessage = ChatMessage(
-            role: 'assistant',
-            content: 'Sorry, I couldn\'t generate a response. Please try again.',
-            id: tempMessage.id,
-            timestamp: tempMessage.timestamp,
-            createdAt: DateTime.now(),
-            model: _selectedModel,
-          );
-          _messages[_messages.length - 1] = errorMessage;
-          _error = 'No response received from the model.';
-        }
-      }).timeout(Duration(seconds: 60), onTimeout: () {
-        debugPrint('Send message operation timed out after 60 seconds');
-        _error = 'Operation timed out. Please try again.';
-        
-        // Update the last message to show timeout
-        if (_messages.isNotEmpty && _messages.last.role == 'assistant' && _messages.last.content.isEmpty) {
-          final timeoutMessage = ChatMessage(
-            role: 'assistant',
-            content: 'Sorry, the response timed out. Please try again later.',
-            id: _messages.last.id,
-            timestamp: _messages.last.timestamp,
-            createdAt: DateTime.now(),
-            model: _selectedModel,
-          );
-          _messages[_messages.length - 1] = timeoutMessage;
-        }
-      });
-    } catch (e) {
-      _error = 'Error: ${e.toString()}';
-      debugPrint('Chat error: $e');
-    } finally {
-      // Ensure loading state is always turned off when done
-      _isLoading = false;
-      
-      // If _error is null but we had a previous error about models, restore it
-      // This ensures the model error message remains visible
-      if (_error == null && previousError != null && previousError.contains('models')) {
-        _error = previousError;
+            }
+            
+            // Process normal (non-error) chunks
+            _currentStreamedResponse += chunk;
+            _streamController?.add(chunk);
+            
+            // Update last message content in state
+            if (_messages.isNotEmpty && _messages.last.role == 'assistant') {
+              // Instead of modifying the existing message's content, create a new message with the streamed content
+              _messages[_messages.length - 1] = ChatMessage(
+                id: _messages.last.id,
+                role: 'assistant',
+                content: _currentStreamedResponse, // Use only the streamed content, not existing content
+                model: _selectedModel,
+                createdAt: _messages.last.createdAt,
+                timestamp: _messages.last.timestamp, // Preserve the timestamp
+              );
+              notifyListeners();
+            }
+          },
+          onDone: () {
+            // Update token usage for the assistant response if we have messages
+            if (_messages.isNotEmpty) {
+              _updateTokenUsage(_messages.last, isInput: false);
+            }
+            
+            // Check if we have any content in the last message
+            if (_currentStreamedResponse.isEmpty) {
+              // If we have no content, we might have had a stream error. Log it.
+              debugPrint('Stream completed with empty response. This might indicate an error.');
+            } else {
+              // If we have content, consider it a success even if there was an error
+              debugPrint('Stream completed with ${_currentStreamedResponse.length} characters.');
+              
+              // Set the final message content when streaming is done
+              if (_messages.isNotEmpty && _messages.last.role == 'assistant') {
+                // Create a new message with the final content
+                _messages[_messages.length - 1] = ChatMessage(
+                  id: _messages.last.id,
+                  role: 'assistant',
+                  content: _currentStreamedResponse,
+                  model: _selectedModel,
+                  createdAt: _messages.last.createdAt,
+                  timestamp: _messages.last.timestamp,
+                );
+              }
+              
+              // Clear any error that might have been set
+              _error = null;
+            }
+            
+            // Notify UI of completion
+            _isLoading = false;
+            notifyListeners();
+            
+            // Close the stream controller
+            if (_streamController != null && !_streamController!.isClosed) {
+              _streamController!.close();
+            }
+            
+            debugPrint('Stream completed');
+            if (_messages.isNotEmpty) {
+              debugPrint('Final message content length: ${_messages.last.content.length}');
+            }
+          },
+          onError: (e) {
+            debugPrint('Stream error: $e');
+            
+            // Only set error state if we don't have any content in the last message
+            if (_currentStreamedResponse.isEmpty) {
+              setError('Error during streaming: $e');
+            } else {
+              // If we have partial content, just log the error but don't show it to the user
+              debugPrint('Stream error occurred, but we have partial content (${_currentStreamedResponse.length} chars). Not showing error to user.');
+              // Clear any error state
+              _error = null;
+              _isLoading = false;
+              notifyListeners();
+            }
+            
+            if (_streamController != null && !_streamController!.isClosed) {
+              _streamController!.addError(e);
+              _streamController!.close();
+            }
+          },
+          cancelOnError: true,
+        );
+      } catch (e) {
+        debugPrint('Error setting up stream: $e');
+        setError('Error setting up message stream: $e');
       }
-      
-      notifyListeners();
+    } catch (e) {
+      debugPrint('Error in sendMessage: $e');
+      setError('Error sending message: $e');
     }
   }
   
@@ -707,59 +712,63 @@ class ChatProvider with ChangeNotifier {
     }
   }
   
-  // Sync models with backend
-  Future<void> syncModels() async {
+  // Refresh models from the server (renamed from syncModels)
+  Future<void> refreshModels() async {
     try {
       _isLoadingModels = true;
       notifyListeners();
       
-      final updatedModels = await _modelService.syncModels(
-        userId: _currentUserId,
-        username: _currentUserName,
-      );
+      // Only use the /models/list endpoint to get models
+      final models = await _modelService.getModels();
       
-      if (updatedModels.isNotEmpty) {
-        _availableModels = updatedModels;
-        
-        // Reselect current model if we had one previously
-        if (_selectedModel != null) {
-          final String currentModelId = _selectedModel!.modelId;
-          
-          // Try to find the same model in the updated list
-          final modelIndex = _availableModels.indexWhere(
-            (model) => model.modelId == currentModelId
-          );
-          
-          if (modelIndex >= 0) {
-            // Found the same model in the updated list
-            setSelectedModel(_availableModels[modelIndex]);
-          } else if (_availableModels.isNotEmpty) {
-            // Couldn't find same model, use the first available
-            setSelectedModel(_availableModels.first);
-          }
-        } else if (_availableModels.isNotEmpty) {
-          // No previously selected model, use the first one
-          setSelectedModel(_availableModels.first);
-        }
+      if (models.isNotEmpty) {
+        _availableModels = models;
+        _updateSelectedModelAfterRefresh();
+      } else {
+        _error = 'No models returned from server. Please try again.';
       }
     } catch (e) {
-      debugPrint('Error syncing models: $e');
-      _error = 'Failed to sync models. Please try again.';
+      debugPrint('Error refreshing models: $e');
+      _error = 'Failed to refresh models. Please try again.';
     } finally {
       _isLoadingModels = false;
       notifyListeners();
     }
   }
   
+  // Helper method to update the selected model after refresh (renamed from _updateSelectedModelAfterSync)
+  void _updateSelectedModelAfterRefresh() {
+    // Reselect current model if we had one previously
+    if (_selectedModel != null) {
+      final String currentModelId = _selectedModel!.modelId;
+      
+      // Try to find the same model in the updated list
+      final modelIndex = _availableModels.indexWhere(
+        (model) => model.modelId == currentModelId
+      );
+      
+      if (modelIndex >= 0) {
+        // Found the same model in the updated list
+        setSelectedModel(_availableModels[modelIndex]);
+      } else if (_availableModels.isNotEmpty) {
+        // Couldn't find same model, use the first available
+        setSelectedModel(_availableModels.first);
+      }
+    } else if (_availableModels.isNotEmpty) {
+      // No previously selected model, use the first one
+      setSelectedModel(_availableModels.first);
+    }
+  }
+  
   // Set user information
   void setUserId(String userId, {String? username}) {
     _currentUserId = userId;
-    // Set the username if provided, otherwise use userId as username
     _currentUserName = username ?? userId;
-    debugPrint('Set user ID: $userId and username: $_currentUserName');
     
-    // Also set the username in ChatService for authentication
-    _chatService.setCurrentUsername(_currentUserName ?? userId);
+    // Update chat service with username for authentication
+    _chatService.setCurrentUsername(_currentUserName!);
+    
+    debugPrint('Set user ID: $userId and username: ${username ?? userId}');
     
     // Reset conversation ID so a new one will be created
     _currentConversationId = null;
@@ -783,9 +792,72 @@ class ChatProvider with ChangeNotifier {
   // Helper method to ensure we have a valid user ID
   String _ensureValidUserId() {
     if (_currentUserId == null || _currentUserId!.isEmpty) {
-      debugPrint('Warning: No user ID set, using default_user');
-      _currentUserId = 'default_user';
+      debugPrint('Warning: No user ID set, using generated ObjectId');
+      _currentUserId = defaultObjectId;
     }
     return _currentUserId!;
+  }
+
+  // Helper method to finalize an assistant message after streaming completes
+  void _finalizeAssistantMessage(String content) {
+    // Only proceed if there's actual content
+    if (content.isEmpty) {
+      debugPrint('Warning: Attempted to finalize an empty assistant message');
+      return;
+    }
+    
+    // Find the last assistant message
+    final lastIndex = _messages.length - 1;
+    if (lastIndex >= 0 && _messages[lastIndex].role == 'assistant') {
+      // Create the final message
+      final finalMessage = ChatMessage(
+        id: _messages[lastIndex].id,
+        role: 'assistant',
+        content: content,
+        model: _selectedModel,
+        createdAt: DateTime.now(),  // Update with final timestamp
+        timestamp: _messages[lastIndex].timestamp,
+      );
+      
+      // Replace the temporary message
+      _messages[lastIndex] = finalMessage;
+      
+      // Track token usage
+      _updateTokenUsageWithFallback(finalMessage, isInput: false);
+      
+      // Update conversation title if needed
+      if (_messages.length >= 3 && _currentConversationId != null) {
+        _updateConversationTitle();
+      }
+    }
+    
+    // Clear loading state and current streamed response
+    _isLoading = false;
+    _currentStreamedResponse = '';
+    notifyListeners();
+  }
+
+  // Explicitly create a new conversation before sending any messages
+  // This can be called when initializing the chat screen to avoid race conditions
+  Future<bool> prepareConversation() async {
+    try {
+      debugPrint('Explicitly preparing conversation before sending messages');
+      await _ensureConversationExists();
+      
+      if (_currentConversationId == null || _currentConversationId!.isEmpty) {
+        debugPrint('ERROR: Failed to create conversation during preparation');
+        _error = 'Failed to prepare conversation. Please try again.';
+        notifyListeners();
+        return false;
+      }
+      
+      debugPrint('Successfully prepared conversation: $_currentConversationId');
+      return true;
+    } catch (e) {
+      debugPrint('Error preparing conversation: $e');
+      _error = 'Failed to prepare conversation: $e';
+      notifyListeners();
+      return false;
+    }
   }
 } 

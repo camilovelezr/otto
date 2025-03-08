@@ -49,16 +49,30 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
     }
   }
   
-  Future<void> _syncModels() async {
+  Future<void> _refreshModels() async {
     setState(() {
       _isLoading = true;
       _error = null;
     });
     
     try {
-      await _modelService.syncModels();
-      await _loadModels();
+      // Fetch models from the /models/list endpoint
+      final models = await _modelService.getModels(provider: _filterProvider);
+      setState(() {
+        _models = models;
+        _isLoading = false;
+      });
+      
+      // Show success message
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Successfully loaded ${models.length} models'),
+          backgroundColor: Colors.green,
+        ),
+      );
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _error = e.toString();
         _isLoading = false;
@@ -67,7 +81,7 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
       // Show error snackbar
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Failed to sync models: ${e.toString()}'),
+          content: Text('Failed to load models: ${e.toString()}'),
           backgroundColor: Colors.red,
         ),
       );
@@ -142,11 +156,11 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
             tooltip: 'Refresh',
           ),
           
-          // Sync button
+          // Get Models button (renamed from Sync)
           IconButton(
-            icon: const Icon(Icons.sync),
-            onPressed: _syncModels,
-            tooltip: 'Sync Models from LiteLLM',
+            icon: const Icon(Icons.cloud_download),
+            onPressed: _refreshModels,
+            tooltip: 'Get Models from Server',
           ),
         ],
       ),
@@ -174,8 +188,8 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
                           const Text('No models found'),
                           const SizedBox(height: 16),
                           ElevatedButton(
-                            onPressed: _syncModels,
-                            child: const Text('Sync Models'),
+                            onPressed: _refreshModels,
+                            child: const Text('Load Models'),
                           ),
                         ],
                       ),
@@ -225,7 +239,7 @@ class ModelCard extends StatelessWidget {
           InfoRow(
             icon: Icons.token,
             label: 'Context Window',
-            value: '${model.maxTotalTokens} tokens',
+            value: '${model.maxInputTokens} tokens',
           ),
           InfoRow(
             icon: Icons.arrow_forward,
@@ -289,7 +303,6 @@ class ModelEditDialog extends StatefulWidget {
 class _ModelEditDialogState extends State<ModelEditDialog> {
   late TextEditingController _maxInputTokensController;
   late TextEditingController _maxOutputTokensController;
-  late TextEditingController _maxTotalTokensController;
   late TextEditingController _inputPriceController;
   late TextEditingController _outputPriceController;
   
@@ -298,7 +311,6 @@ class _ModelEditDialogState extends State<ModelEditDialog> {
     super.initState();
     _maxInputTokensController = TextEditingController(text: widget.model.maxInputTokens.toString());
     _maxOutputTokensController = TextEditingController(text: widget.model.maxOutputTokens.toString());
-    _maxTotalTokensController = TextEditingController(text: widget.model.maxTotalTokens.toString());
     _inputPriceController = TextEditingController(text: widget.model.inputPricePerToken.toString());
     _outputPriceController = TextEditingController(text: widget.model.outputPricePerToken.toString());
   }
@@ -307,7 +319,6 @@ class _ModelEditDialogState extends State<ModelEditDialog> {
   void dispose() {
     _maxInputTokensController.dispose();
     _maxOutputTokensController.dispose();
-    _maxTotalTokensController.dispose();
     _inputPriceController.dispose();
     _outputPriceController.dispose();
     super.dispose();
@@ -329,18 +340,9 @@ class _ModelEditDialogState extends State<ModelEditDialog> {
             const Text('Token Limits', style: TextStyle(fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
             TextField(
-              controller: _maxTotalTokensController,
-              decoration: const InputDecoration(
-                labelText: 'Max Total Tokens',
-                border: OutlineInputBorder(),
-              ),
-              keyboardType: TextInputType.number,
-            ),
-            const SizedBox(height: 8),
-            TextField(
               controller: _maxInputTokensController,
               decoration: const InputDecoration(
-                labelText: 'Max Input Tokens',
+                labelText: 'Max Input Tokens (Context Window)',
                 border: OutlineInputBorder(),
               ),
               keyboardType: TextInputType.number,
@@ -400,7 +402,6 @@ class _ModelEditDialogState extends State<ModelEditDialog> {
             final updatedModel = widget.model.copyWith(
               maxInputTokens: int.tryParse(_maxInputTokensController.text) ?? widget.model.maxInputTokens,
               maxOutputTokens: int.tryParse(_maxOutputTokensController.text) ?? widget.model.maxOutputTokens,
-              maxTotalTokens: int.tryParse(_maxTotalTokensController.text) ?? widget.model.maxTotalTokens,
               inputPricePerToken: double.tryParse(_inputPriceController.text) ?? widget.model.inputPricePerToken,
               outputPricePerToken: double.tryParse(_outputPriceController.text) ?? widget.model.outputPricePerToken,
             );

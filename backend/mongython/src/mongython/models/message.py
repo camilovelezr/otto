@@ -1,26 +1,10 @@
 """MongoDB Message Model for Chatbot Conversation."""
 
-from typing import Dict, List, Optional, Any, Literal, Union
+from typing import Dict, Optional, Any, Literal
 from datetime import datetime
 from pydantic import BaseModel, Field, UUID4
-from beanie import Document, Indexed
+from beanie import Document
 import uuid
-
-
-class MessageMetadata(BaseModel):
-    """Metadata for message tracking and analytics."""
-
-    token_count: int = 0
-    model_id: Optional[str] = None
-    latency_ms: Optional[int] = None
-    finish_reason: Optional[str] = None
-
-    # Performance metrics
-    tokens_per_second: Optional[float] = None
-    cost: Optional[float] = None
-
-    # Raw provider response (optional, for debugging)
-    raw_response: Optional[Dict[str, Any]] = None
 
 
 class Message(Document):
@@ -37,10 +21,10 @@ class Message(Document):
 
     # Message metadata
     created_at: datetime = Field(default_factory=datetime.now)
-    metadata: MessageMetadata = Field(default_factory=MessageMetadata)
 
     # For assistant messages, store which model generated it
     model_id: Optional[str] = None
+    token_count: int = 0
 
     class Settings:
         name = "messages"
@@ -58,8 +42,8 @@ class Message(Document):
             content=content,
             conversation_id=conversation_id,
             parent_message_id=parent_message_id,
-            metadata=MessageMetadata(token_count=cls.estimate_token_count(content)),
         )
+        message.token_count = cls.estimate_token_count(content)
         await message.save()
         return message
 
@@ -70,13 +54,9 @@ class Message(Document):
         content: str,
         model_id: str,
         parent_message_id: UUID4,
-        metadata: Optional[MessageMetadata] = None,
+        token_count: Optional[int] = None,
     ) -> "Message":
         """Create a new assistant message."""
-        if metadata is None:
-            metadata = MessageMetadata(
-                token_count=cls.estimate_token_count(content), model_id=model_id
-            )
 
         message = cls(
             role="assistant",
@@ -84,7 +64,7 @@ class Message(Document):
             conversation_id=conversation_id,
             parent_message_id=parent_message_id,
             model_id=model_id,
-            metadata=metadata,
+            token_count=token_count,
         )
         await message.save()
         return message
@@ -103,13 +83,7 @@ class Message(Document):
             "content": self.content,
             "created_at": self.created_at.isoformat(),
             "model_id": self.model_id,
-            "metadata": {
-                "token_count": self.metadata.token_count,
-                "latency_ms": self.metadata.latency_ms,
-                "tokens_per_second": self.metadata.tokens_per_second,
-                "cost": self.metadata.cost,
-                "finish_reason": self.metadata.finish_reason,
-            },
+            "token_count": self.token_count,
         }
 
     def to_chat_message(self) -> Dict[str, str]:
@@ -123,18 +97,17 @@ class TokenWindowState(BaseModel):
     total_tokens: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
-    total_cost: float = 0.0
 
     def update_from_message(self, message: Message, is_input: bool = None) -> None:
         """Update the token window with tokens from a message."""
-        if message.metadata.token_count <= 0:
+        if message.token_count <= 0:
             return
 
-        token_count = message.metadata.token_count
+        token_count = message.token_count
 
         # Determine if input or output based on role if not explicitly provided
-        if is_input is None:
-            is_input = message.role == "user" or message.role == "system"
+        # if is_input is None:
+        is_input = message.role == "user" or message.role == "system"
 
         # Update token counts
         self.total_tokens += token_count
@@ -142,7 +115,3 @@ class TokenWindowState(BaseModel):
             self.input_tokens += token_count
         else:
             self.output_tokens += token_count
-
-        # Update cost if available
-        if message.metadata.cost:
-            self.total_cost += message.metadata.cost

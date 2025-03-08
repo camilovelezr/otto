@@ -1,11 +1,10 @@
 """MongoDB Conversation Model for Chatbot."""
 
-from typing import Dict, List, Optional, Any, Union, Annotated
+import uuid
+from typing import Dict, List, Optional, Any, Annotated
 from datetime import datetime
 from pydantic import BaseModel, Field, UUID4
-from beanie import Document, Indexed, Link
-import uuid
-
+from beanie import Document, Link, Indexed
 from mongython.models.user import User
 from mongython.models.message import Message, TokenWindowState
 
@@ -54,7 +53,11 @@ class Conversation(Document):
         await conversation.save()
         return conversation
 
-    async def add_user_message(self, content: str) -> Message:
+    async def add_user_message(
+        self,
+        content: str,
+        parent_message_id: Optional[UUID4] = None,
+    ) -> Message:
         """Add a user message to the conversation."""
         # Update conversation timestamp
         self.updated_at = datetime.now()
@@ -62,7 +65,9 @@ class Conversation(Document):
 
         # Create the message
         message = await Message.create_user_message(
-            conversation_id=self.id, content=content
+            conversation_id=self.id,
+            content=content,
+            parent_message_id=parent_message_id,
         )
 
         # Update token window
@@ -76,27 +81,16 @@ class Conversation(Document):
         content: str,
         model_id: str,
         parent_message_id: UUID4,
-        metadata: Optional[Dict[str, Any]] = None,
+        token_count: Optional[int] = None,
     ) -> Message:
-        """Add an assistant (AI) message to the conversation."""
-        # Update conversation timestamp
-        self.updated_at = datetime.now()
-        await self.save()
-
-        # Create message metadata if provided
-        message_metadata = None
-        if metadata:
-            from mongython.models.message import MessageMetadata
-
-            message_metadata = MessageMetadata(**metadata)
-
+        """Add an assistant message to the conversation."""
         # Create the message
         message = await Message.create_assistant_message(
             conversation_id=self.id,
             content=content,
             model_id=model_id,
             parent_message_id=parent_message_id,
-            metadata=message_metadata,
+            token_count=token_count,
         )
 
         # Update token window
@@ -173,69 +167,3 @@ class Conversation(Document):
             "detected_topics": self.detected_topics,
             "summary": self.summary,
         }
-
-    @classmethod
-    async def migrate_from_old_format(cls, conversation_id: str) -> "Conversation":
-        """
-        Migrate a conversation from the old format to the new format.
-
-        This is a helper method for transitioning from the old storage format
-        to the new Message-based format.
-        """
-        from mongython.models.conversation_old import Conversation as OldConversation
-
-        # Find the old conversation
-        old_conversation = await OldConversation.get(conversation_id)
-        if not old_conversation:
-            raise ValueError(f"Old conversation with ID {conversation_id} not found")
-
-        # Create new conversation with same metadata
-        new_conversation = cls(
-            id=uuid.UUID(conversation_id),
-            user=old_conversation.user,
-            title=old_conversation.title,
-            created_at=old_conversation.created_at,
-            updated_at=old_conversation.updated_at,
-        )
-        await new_conversation.save()
-
-        # Convert old messages to new format
-        parent_message_id = None
-        for old_message in old_conversation.messages:
-            if isinstance(old_message, dict) and old_message.get("role") == "user":
-                # User message
-                message = await Message.create_user_message(
-                    conversation_id=new_conversation.id,
-                    content=old_message.get("content", ""),
-                    parent_message_id=parent_message_id,
-                )
-                parent_message_id = message.id
-
-                # Update token window
-                new_conversation.token_window.update_from_message(
-                    message, is_input=True
-                )
-
-            elif hasattr(old_message, "choices") and hasattr(
-                old_message.choices[0], "message"
-            ):
-                # Assistant message (from ChatCompletion)
-                content = old_message.choices[0].message.content
-                model_id = getattr(old_message, "model", "unknown")
-
-                message = await Message.create_assistant_message(
-                    conversation_id=new_conversation.id,
-                    content=content,
-                    model_id=model_id,
-                    parent_message_id=parent_message_id,
-                )
-                parent_message_id = message.id
-
-                # Update token window
-                new_conversation.token_window.update_from_message(
-                    message, is_input=False
-                )
-
-        # Save updated token window
-        await new_conversation.save()
-        return new_conversation

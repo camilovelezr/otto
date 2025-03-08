@@ -54,12 +54,6 @@ class _ModelSelectorState extends State<ModelSelector> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            Icons.smart_toy_outlined,
-            size: 16,
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-          const SizedBox(width: 8),
           Text(
             widget.selectedModel?.displayName ?? 'Select Model',
             style: theme.textTheme.bodyMedium?.copyWith(
@@ -125,11 +119,6 @@ class _ModelSelectorState extends State<ModelSelector> {
                   dense: true,
                   selected: isSelected,
                   selectedTileColor: theme.colorScheme.primaryContainer.withOpacity(0.3),
-                  leading: Icon(
-                    _getProviderIcon(model.provider),
-                    size: 20,
-                    color: isSelected ? theme.colorScheme.primary : null,
-                  ),
                   title: Text(
                     model.displayName,
                     style: theme.textTheme.bodyMedium?.copyWith(
@@ -138,7 +127,7 @@ class _ModelSelectorState extends State<ModelSelector> {
                     ),
                   ),
                   subtitle: Text(
-                    '${model.provider} • ${model.maxTotalTokens} tokens',
+                    '${model.provider} • ${model.maxInputTokens} tokens',
                     style: theme.textTheme.bodySmall,
                   ),
                   onTap: () {
@@ -175,22 +164,5 @@ class _ModelSelectorState extends State<ModelSelector> {
              model.modelId.toLowerCase().contains(query) ||
              model.provider.toLowerCase().contains(query);
     }).toList();
-  }
-
-  IconData _getProviderIcon(String provider) {
-    switch (provider.toLowerCase()) {
-      case 'openai':
-        return Icons.auto_awesome;
-      case 'anthropic':
-        return Icons.psychology;
-      case 'google':
-        return Icons.smart_toy;
-      case 'mistral':
-        return Icons.air;
-      case 'local':
-        return Icons.computer;
-      default:
-        return Icons.smart_toy_outlined;
-    }
   }
 } 

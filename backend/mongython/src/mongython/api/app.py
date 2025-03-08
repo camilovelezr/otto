@@ -20,6 +20,7 @@ from mongython.api.errors import (
 from mongython.api.users import router as users_router
 from mongython.api.conversations import router as conversations_router
 from mongython.api.models import router as models_router
+from mongython.api.chat import router as chat_router
 from dotenv import load_dotenv, find_dotenv
 from mongython.models.user import User
 
@@ -77,6 +78,7 @@ def create_application() -> FastAPI:
     app.include_router(users_router)
     app.include_router(conversations_router)
     app.include_router(models_router)
+    app.include_router(chat_router)
 
     # Add health check endpoint
     @app.get("/", tags=["health"])
@@ -100,98 +102,6 @@ def create_application() -> FastAPI:
             logger.warning(f"Health check: MongoDB connection failed: {str(e)}")
 
         return health_info
-
-    # LiteLLM passthrough - Use the global LITELLM_URL
-    @app.api_route(
-        "/litellm{path:path}",
-        methods=["GET", "POST", "PUT", "DELETE"],
-        tags=["litellm"],
-    )
-    async def litellm_passthrough(request: Request, path: str):
-        """Passthrough endpoint for LiteLLM service."""
-        client = httpx.AsyncClient(base_url=LITELLM_URL)
-
-        try:
-            # Get request details
-            url = f"{path}"
-
-            # Forward most headers, but add or modify specific ones for LiteLLM
-            headers = {
-                key: value
-                for key, value in request.headers.items()
-                if key.lower()
-                not in (
-                    "host",
-                    "content-length",
-                    "authorization",
-                )  # Don't forward any existing auth header
-            }
-
-            # Get username from headers for authentication
-            username = request.headers.get("X-Username")
-            if not username:
-                raise HTTPException(
-                    status_code=401, detail="X-Username header is required"
-                )
-
-            # Get user document to access their auth token
-            user = await User.find_one(User.username == username)
-            if not user or not user.auth_token:
-                raise HTTPException(
-                    status_code=401, detail="User not found or no auth token available"
-                )
-
-            # Use the user's auth token for LiteLLM
-            headers["Authorization"] = f"Bearer {user.auth_token}"
-            logger.debug(f"Using auth token for user: {username}")
-
-            # Get the request body if it exists
-            body = await request.body()
-
-            # Log the request (but omit sensitive data)
-            logger.info(f"LiteLLM passthrough: {request.method} {url}")
-
-            # Make the request to the LiteLLM service
-            response = await client.request(
-                method=request.method,
-                url=url,
-                headers=headers,
-                content=body,
-                timeout=None,
-            )
-
-            # Get the response content and headers
-            content = response.content
-            response_headers = {
-                key: value
-                for key, value in response.headers.items()
-                if key.lower() not in ("transfer-encoding")
-            }
-
-            # Return a streaming response if the original response is streaming
-            if "content-type" in response_headers and "stream" in response_headers.get(
-                "content-type", ""
-            ):
-                return StreamingResponse(
-                    content=response.aiter_bytes(),
-                    status_code=response.status_code,
-                    headers=response_headers,
-                )
-
-            # Regular response
-            return Response(
-                content=content,
-                status_code=response.status_code,
-                headers=response_headers,
-            )
-
-        except httpx.RequestError as e:
-            logger.error(f"Error connecting to LiteLLM service: {str(e)}")
-            raise HTTPException(
-                status_code=503, detail=f"Error connecting to LiteLLM service: {str(e)}"
-            )
-        finally:
-            await client.aclose()
 
     return app
 

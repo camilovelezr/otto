@@ -26,7 +26,9 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   final ScrollController _scrollController = ScrollController();
   final FocusNode _inputFocusNode = FocusNode();
   bool _isSidePanelExpanded = true;
+  bool _isTokenWindowVisible = true;
   static const String _sidePanelKey = 'side_panel_expanded';
+  static const String _tokenWindowKey = 'token_window_visible';
   late AnimationController _shimmerController;
   late AnimationController _scrollButtonController;
   late Animation<double> _scrollButtonScale;
@@ -39,7 +41,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   void initState() {
     super.initState();
     _messageController = TextEditingController();
-    _loadSidePanelState();
+    _loadSavedStates();
     
     // Defer initialization to after the build is complete
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -112,15 +114,21 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     super.dispose();
   }
 
-  void _initializeChat() {
+  void _initializeChat() async {
     // Initialize the chat provider
-    context.read<ChatProvider>().initialize();
+    final chatProvider = context.read<ChatProvider>();
+    await chatProvider.initialize();
+    
+    // Explicitly prepare a conversation to ensure we have a conversation ID
+    // before the user sends their first message
+    await chatProvider.prepareConversation();
   }
 
-  Future<void> _loadSidePanelState() async {
+  Future<void> _loadSavedStates() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
       _isSidePanelExpanded = prefs.getBool(_sidePanelKey) ?? true;
+      _isTokenWindowVisible = prefs.getBool(_tokenWindowKey) ?? true;
     });
   }
 
@@ -129,10 +137,22 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     await prefs.setBool(_sidePanelKey, isExpanded);
   }
 
+  Future<void> _saveTokenWindowState(bool isVisible) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_tokenWindowKey, isVisible);
+  }
+
   void _toggleSidePanel() {
     setState(() {
       _isSidePanelExpanded = !_isSidePanelExpanded;
       _saveSidePanelState(_isSidePanelExpanded);
+    });
+  }
+
+  void _toggleTokenWindow() {
+    setState(() {
+      _isTokenWindowVisible = !_isTokenWindowVisible;
+      _saveTokenWindowState(_isTokenWindowVisible);
     });
   }
 
@@ -184,7 +204,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         child: Column(
           children: [
             // Token usage visualization
-            if (chatProvider.totalTokens > 0)
+            if (_isTokenWindowVisible && chatProvider.totalTokens > 0)
               TokenWindowVisualization(
                 totalTokens: chatProvider.totalTokens,
                 inputTokens: chatProvider.totalInputTokens,
@@ -275,24 +295,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           ],
         ),
       ),
-      floatingActionButton: Padding(
-        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewPadding.bottom),
-        child: FloatingActionButton(
-          tooltip: 'Reload Models',
-          heroTag: 'reload',
-          backgroundColor: Theme.of(context).colorScheme.surface,
-          elevation: 1,
-          child: Icon(
-            Icons.refresh,
-            color: Theme.of(context).colorScheme.primary,
-          ),
-          onPressed: () async {
-            // Safely reload models without causing setState during build
-            // Use the syncModelsWithBackend flag to ensure we get fresh models from the backend
-            await chatProvider.initialize(syncModelsWithBackend: true);
-          },
-        ),
-      ),
     );
   }
 
@@ -333,6 +335,14 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           ),
           
           const Spacer(),
+
+          // Token window toggle
+          if (chatProvider.totalTokens > 0)
+            IconButton(
+              icon: Icon(_isTokenWindowVisible ? Icons.analytics : Icons.analytics_outlined),
+              onPressed: _toggleTokenWindow,
+              tooltip: _isTokenWindowVisible ? 'Hide token usage' : 'Show token usage',
+            ),
           
           // Model selector
           Padding(
@@ -353,14 +363,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(
-                        chatProvider.selectedModel != null
-                            ? _getModelProviderIcon(chatProvider.selectedModel!.provider)
-                            : Icons.smart_toy_outlined,
-                        size: 16,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                      const SizedBox(width: 8),
                       Text(
                         chatProvider.selectedModel?.displayName ?? 'Select Model',
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
@@ -462,12 +464,24 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   final message = messages[index];
                   final isLastMessage = index == messages.length - 1;
                   final isStreaming = isLastMessage && chatProvider.isLoading;
+                  
+                  // Add debug logging for the last message when streaming
+                  if (isLastMessage) {
+                    debugPrint('Last message - Role: ${message.role}, Content length: ${message.content.length}');
+                    if (message.content.length > 0) {
+                      debugPrint('Message content preview: "${message.content.substring(0, min(50, message.content.length))}..."');
+                    }
+                    debugPrint('isStreaming: $isStreaming, currentStreamedResponse length: ${chatProvider.currentStreamedResponse.length}');
+                    if (chatProvider.currentStreamedResponse.length > 0) {
+                      debugPrint('Stream content preview: "${chatProvider.currentStreamedResponse.substring(0, min(50, chatProvider.currentStreamedResponse.length))}..."');
+                    }
+                  }
 
                   return ChatMessageWidget(
                     key: ValueKey(message.id),
                     message: message,
                     isStreaming: isStreaming,
-                    streamedContent: chatProvider.currentStreamedResponse,
+                    streamedContent: isStreaming ? chatProvider.currentStreamedResponse : message.content,
                   );
                 },
               ),
@@ -524,8 +538,28 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
             child: !hasModels || selectedModel == null
                 ? _buildNoModelsInput()
                 : MessageInput(
-                    onSubmit: (content) {
-                      chatProvider.sendMessage(content);
+                    onSubmit: (content) async {
+                      final chatProvider = context.read<ChatProvider>();
+                      
+                      // Check if we have a valid conversation ID
+                      if (chatProvider.conversationId == null || 
+                          chatProvider.conversationId!.isEmpty) {
+                        // Try to prepare a conversation first
+                        final success = await chatProvider.prepareConversation();
+                        if (!success) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Failed to create conversation. Please try again.'),
+                              backgroundColor: Theme.of(context).colorScheme.error,
+                            ),
+                          );
+                          return;
+                        }
+                      }
+                      
+                      // Now send the message with a valid conversation ID
+                      chatProvider.addUserMessage(content);
+                      
                       // Immediately scroll after user message is added
                       _scrollToShowNewMessage();
                     },
@@ -647,153 +681,156 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            if (isLoading)
-              const CircularProgressIndicator()
-            else
-              Icon(
-                hasModels ? Icons.chat_bubble_outline : Icons.error_outline,
-                size: 64,
-                color: hasModels 
-                  ? Theme.of(context).colorScheme.primary.withOpacity(0.5)
-                  : Theme.of(context).colorScheme.error.withOpacity(0.7),
-              ),
-            const SizedBox(height: 24),
-            if (isLoading)
-              Text(
-                'Setting up your conversation...',
-                style: Theme.of(context).textTheme.titleLarge,
-                textAlign: TextAlign.center,
-              )
-            else if (!hasModels)
-              Text(
-                'Cannot start conversation',
-                style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                  color: Theme.of(context).colorScheme.error,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (isLoading)
+                const CircularProgressIndicator()
+              else
+                Icon(
+                  hasModels ? Icons.chat_bubble_outline : Icons.error_outline,
+                  size: 64,
+                  color: hasModels 
+                    ? Theme.of(context).colorScheme.primary.withOpacity(0.5)
+                    : Theme.of(context).colorScheme.error.withOpacity(0.7),
                 ),
-                textAlign: TextAlign.center,
-              )
-            else
-              Text(
-                'Start a new conversation',
-                style: Theme.of(context).textTheme.titleLarge,
-                textAlign: TextAlign.center,
-              ),
-            const SizedBox(height: 8),
-            if (!isLoading && hasModels)
-              Text(
-                'Type a message to start chatting',
-                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+              const SizedBox(height: 24),
+              if (isLoading)
+                Text(
+                  'Setting up your conversation...',
+                  style: Theme.of(context).textTheme.titleLarge,
+                  textAlign: TextAlign.center,
+                )
+              else if (!hasModels)
+                Text(
+                  'Cannot start conversation',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                  textAlign: TextAlign.center,
+                )
+              else
+                Text(
+                  'Start a new conversation',
+                  style: Theme.of(context).textTheme.titleLarge,
+                  textAlign: TextAlign.center,
                 ),
-                textAlign: TextAlign.center,
-              )
-            else if (!isLoading && !hasModels)
-              Text(
-                'No models available from the backend server',
-                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                  color: Theme.of(context).colorScheme.error.withOpacity(0.7),
+              const SizedBox(height: 8),
+              if (!isLoading && hasModels)
+                Text(
+                  'Type a message to start chatting',
+                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+                  ),
+                  textAlign: TextAlign.center,
+                )
+              else if (!isLoading && !hasModels)
+                Text(
+                  'No models available from the backend server',
+                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                    color: Theme.of(context).colorScheme.error.withOpacity(0.7),
+                  ),
+                  textAlign: TextAlign.center,
                 ),
-                textAlign: TextAlign.center,
-              ),
-            
-            if (errorMessage != null) ...[
+              
+              if (errorMessage != null) ...[
+                const SizedBox(height: 24),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.errorContainer,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    'Error: $errorMessage',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onErrorContainer,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ],
+              
+              // Show model connectivity status
               const SizedBox(height: 24),
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.errorContainer,
+                  color: hasModels
+                    ? Theme.of(context).colorScheme.surfaceVariant
+                    : Theme.of(context).colorScheme.errorContainer,
                   borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(
-                  'Error: $errorMessage',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.onErrorContainer,
+                  border: Border.all(
+                    color: hasModels
+                      ? Theme.of(context).dividerColor
+                      : Theme.of(context).colorScheme.error,
+                    width: 1,
                   ),
-                  textAlign: TextAlign.center,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          hasModels ? Icons.check_circle : Icons.warning,
+                          color: hasModels
+                            ? Theme.of(context).colorScheme.primary
+                            : Theme.of(context).colorScheme.error,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Model Connectivity',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      hasModels
+                        ? 'Successfully loaded ${chatProvider.availableModels.length} models\n'
+                          'Current model: ${selectedModel?.displayName ?? "None"}'
+                        : 'Unable to connect to the model service\n'
+                          'Please check your backend connection',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        fontWeight: hasModels ? FontWeight.normal : FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'Backend URL: ${EnvConfig.backendUrl}',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        fontFamily: 'monospace',
+                        color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+                      ),
+                    ),
+                    
+                    if (!hasModels) ... [
+                      const SizedBox(height: 16),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: () {
+                            chatProvider.initialize(syncModelsWithBackend: true);
+                          },
+                          icon: const Icon(Icons.refresh),
+                          label: const Text('Retry Connection'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Theme.of(context).colorScheme.primary,
+                            foregroundColor: Theme.of(context).colorScheme.onPrimary,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
             ],
-            
-            // Show model connectivity status
-            const SizedBox(height: 24),
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: hasModels
-                  ? Theme.of(context).colorScheme.surfaceVariant
-                  : Theme.of(context).colorScheme.errorContainer,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: hasModels
-                    ? Theme.of(context).dividerColor
-                    : Theme.of(context).colorScheme.error,
-                  width: 1,
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        hasModels ? Icons.check_circle : Icons.warning,
-                        color: hasModels
-                          ? Theme.of(context).colorScheme.primary
-                          : Theme.of(context).colorScheme.error,
-                        size: 20,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Model Connectivity',
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    hasModels
-                      ? 'Successfully loaded ${chatProvider.availableModels.length} models\n'
-                        'Current model: ${selectedModel?.displayName ?? "None"}'
-                      : 'Unable to connect to the model service\n'
-                        'Please check your backend connection',
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      fontWeight: hasModels ? FontWeight.normal : FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    'Backend URL: ${EnvConfig.backendUrl}',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      fontFamily: 'monospace',
-                      color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
-                    ),
-                  ),
-                  
-                  if (!hasModels) ... [
-                    const SizedBox(height: 16),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton.icon(
-                        onPressed: () {
-                          chatProvider.initialize(syncModelsWithBackend: true);
-                        },
-                        icon: const Icon(Icons.refresh),
-                        label: const Text('Retry Connection'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Theme.of(context).colorScheme.primary,
-                          foregroundColor: Theme.of(context).colorScheme.onPrimary,
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -802,31 +839,33 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   Widget _buildErrorMessage(ChatProvider chatProvider) {
     return Container(
       padding: const EdgeInsets.all(16),
-      child: Text(
-        chatProvider.error!,
-        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-          color: Theme.of(context).colorScheme.error,
-        ),
-        textAlign: TextAlign.center,
+      margin: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.errorContainer.withOpacity(0.9),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              chatProvider.error!,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: Theme.of(context).colorScheme.onErrorContainer,
+              ),
+              textAlign: TextAlign.left,
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close),
+            onPressed: () {
+              chatProvider.clearError();
+            },
+            tooltip: 'Dismiss error',
+            color: Theme.of(context).colorScheme.onErrorContainer,
+          ),
+        ],
       ),
     );
-  }
-
-  IconData _getModelProviderIcon(String provider) {
-    switch (provider.toLowerCase()) {
-      case 'openai':
-        return Icons.auto_awesome;
-      case 'anthropic':
-        return Icons.psychology;
-      case 'google':
-        return Icons.smart_toy;
-      case 'mistral':
-        return Icons.air;
-      case 'local':
-        return Icons.computer;
-      default:
-        return Icons.smart_toy_outlined;
-    }
   }
 
   void _showModelSelector(BuildContext context, ChatProvider chatProvider) {
@@ -853,12 +892,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   ),
                   child: Row(
                     children: [
-                      Icon(
-                        Icons.smart_toy,
-                        size: 20,
-                        color: Theme.of(context).colorScheme.primary,
-                      ),
-                      const SizedBox(width: 8),
                       Expanded(
                         child: Text(
                           'Select Model',
@@ -952,11 +985,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                             dense: true,
                             selected: isSelected,
                             selectedTileColor: Theme.of(context).colorScheme.primaryContainer.withOpacity(0.3),
-                            leading: Icon(
-                              _getModelProviderIcon(model.provider),
-                              size: 22,
-                              color: isSelected ? Theme.of(context).colorScheme.primary : null,
-                            ),
                             title: Text(
                               model.displayName,
                               style: TextStyle(
@@ -966,7 +994,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                               ),
                             ),
                             subtitle: Text(
-                              '${model.provider} • ${model.maxTotalTokens} tokens',
+                              '${model.provider} • ${model.maxInputTokens} tokens',
                               style: Theme.of(context).textTheme.bodySmall,
                             ),
                             onTap: () {

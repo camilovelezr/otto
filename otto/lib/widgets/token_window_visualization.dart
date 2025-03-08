@@ -20,8 +20,8 @@ class TokenWindowVisualization extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final maxTokens = model?.maxTotalTokens ?? 8192;
-    final usagePercentage = (totalTokens / maxTokens).clamp(0.0, 1.0);
+    final maxTokens = model?.maxInputTokens ?? 8192;
+    final usagePercentage = (inputTokens / maxTokens).clamp(0.0, 1.0);
     
     // Determine color based on usage
     Color barColor;
@@ -51,7 +51,7 @@ class TokenWindowVisualization extends StatelessWidget {
                   ),
                 ),
                 Text(
-                  '${totalTokens.toStringAsFixed(0)} / ${maxTokens.toStringAsFixed(0)}',
+                  '${inputTokens.toStringAsFixed(0)} / ${maxTokens.toStringAsFixed(0)}',
                   style: theme.textTheme.bodyMedium,
                 ),
               ],

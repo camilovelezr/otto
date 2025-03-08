@@ -5,6 +5,19 @@ import '../models/llm_model.dart';
 import '../config/env_config.dart';
 import 'dart:io' if (dart.library.js) 'package:otto/config/platform_stub.dart';
 
+// Helper function to generate a valid MongoDB ObjectId
+String generateObjectId() {
+  // This creates a 24-character hex string that will pass MongoDB ObjectId validation
+  final timestamp = (DateTime.now().millisecondsSinceEpoch ~/ 1000).toRadixString(16).padLeft(8, '0');
+  final machineId = (123456).toRadixString(16).padLeft(6, '0'); // Replace with a random number
+  final processId = (DateTime.now().microsecond % 65535).toRadixString(16).padLeft(4, '0');
+  final counter = (DateTime.now().millisecondsSinceEpoch % 16777216).toRadixString(16).padLeft(6, '0');
+  return timestamp + machineId + processId + counter;
+}
+
+// Default ObjectId to use when no user ID is provided
+final String defaultObjectId = generateObjectId();
+
 class ModelService {
   final String _baseUrl;
   final http.Client _client;
@@ -19,137 +32,23 @@ class ModelService {
       debugPrint('Environment configuration: ${EnvConfig()}');
       debugPrint('Backend URL from config: ${EnvConfig.backendUrl}');
       
-      // Since we know the correct endpoint, try it first and directly
-      final directUrl = provider != null 
-          ? '$_baseUrl/models/list?provider=$provider'
-          : '$_baseUrl/models/list';
+      // We know only /models/list is available, so use it directly
+      final endpoint = '/models/list';
+      // Only add provider parameter if specified, no user identification
+      final String url = provider != null 
+          ? '$_baseUrl$endpoint?provider=$provider'
+          : '$_baseUrl$endpoint';
           
-      debugPrint('Directly trying the known working endpoint: $directUrl');
+      debugPrint('Using models list endpoint: $url');
       
-      try {
-        // Try the direct endpoint first since we know it works
-        final directResponse = await _client.get(
-          Uri.parse(directUrl),
-          headers: {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-            'X-Username': 'default_user',
-          },
-        ).timeout(const Duration(seconds: 15));
-        
-        debugPrint('Direct endpoint response status: ${directResponse.statusCode}');
-        
-        if (directResponse.statusCode == 200) {
-          try {
-            final data = json.decode(directResponse.body);
-            if (data is List) {
-              final models = data.map((json) => LLMModel.fromJson(json)).toList();
-              if (models.isNotEmpty) {
-                debugPrint('Found ${models.length} models from /models/list endpoint');
-                return models;
-              }
-            }
-          } catch (e) {
-            debugPrint('Error parsing direct endpoint response: $e');
-          }
-        }
-      } catch (e) {
-        debugPrint('Error with direct endpoint: $e');
-      }
-      
-      // If direct endpoint failed, now try the test endpoints as fallback
-      debugPrint('Direct endpoint failed, trying alternatives...');
-      
-      // Test various endpoints to find the correct one
-      final testEndpoints = [
-        '/api/models',
-        '/v1/models',
-        '/llm/models'
-      ];
-      
-      List<LLMModel>? modelsFromEndpoint;
-      
-      // Try each endpoint to find working one
-      for (var endpoint in testEndpoints) {
-        try {
-          final testUrl = '$_baseUrl$endpoint';
-          debugPrint('Testing endpoint: $testUrl');
-          
-          final testResponse = await _client.get(
-            Uri.parse(testUrl),
-            headers: {
-              'Accept': 'application/json',
-              'Content-Type': 'application/json',
-            },
-          ).timeout(const Duration(seconds: 5));
-          
-          debugPrint('Endpoint $endpoint response: ${testResponse.statusCode}');
-          
-          // If we got a successful response, try to parse it
-          if (testResponse.statusCode == 200) {
-            try {
-              final data = json.decode(testResponse.body);
-              if (data is List) {
-                final models = data.map((json) => LLMModel.fromJson(json)).toList();
-                if (models.isNotEmpty) {
-                  debugPrint('Found working endpoint: $endpoint with ${models.length} models');
-                  modelsFromEndpoint = models;
-                  break; // Stop testing once we find a working endpoint
-                }
-              }
-            } catch (e) {
-              debugPrint('Error parsing response from $endpoint: $e');
-            }
-          }
-        } catch (e) {
-          debugPrint('Error testing endpoint $endpoint: $e');
-        }
-      }
-      
-      // If we found models from our endpoint testing, return them
-      if (modelsFromEndpoint != null && modelsFromEndpoint.isNotEmpty) {
-        return modelsFromEndpoint;
-      }
-      
-      // If endpoint testing failed, try the original URL
-      final url = provider != null 
-          ? '$_baseUrl/models/list?provider=$provider'
-          : '$_baseUrl/models/list';
-          
-      debugPrint('Falling back to original URL: $url');
-      
-      // Try to ping the server first to check connectivity
-      try {
-        debugPrint('Checking server connectivity at root endpoint: $_baseUrl');
-        final pingResponse = await _client.get(
-          Uri.parse(_baseUrl),
-          headers: {'Accept': 'application/json'},
-        ).timeout(const Duration(seconds: 5));
-        debugPrint('Server ping response: ${pingResponse.statusCode} - ${pingResponse.body.length > 100 ? pingResponse.body.substring(0, 100) + "..." : pingResponse.body}');
-      } catch (e) {
-        debugPrint('Server ping failed: $e');
-        // Try a different endpoint to check if the backend is accessible at all
-        try {
-          debugPrint('Trying alternative endpoint: $_baseUrl/health');
-          final healthResponse = await _client.get(
-            Uri.parse('$_baseUrl/health'),
-            headers: {'Accept': 'application/json'},
-          ).timeout(const Duration(seconds: 5));
-          debugPrint('Health endpoint response: ${healthResponse.statusCode}');
-        } catch (e2) {
-          debugPrint('Health endpoint check failed: $e2');
-        }
-      }
-      
-      // Add more comprehensive headers for potential auth issues
+      // Make a completely plain call with no auth or user identification
       final response = await _client.get(
         Uri.parse(url),
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
-          'X-Username': 'default_user', // Add username header for auth
         },
-      ).timeout(const Duration(seconds: 15)); // Increase timeout
+      ).timeout(const Duration(seconds: 15));
       
       debugPrint('Models response status: ${response.statusCode}');
       
@@ -161,6 +60,13 @@ class ModelService {
           if (data is List) {
             final modelsList = data.map((json) => LLMModel.fromJson(json)).toList();
             debugPrint('Parsed ${modelsList.length} models successfully');
+            
+            // Print out all model IDs for debugging
+            if (modelsList.isNotEmpty) {
+              debugPrint('Found ${modelsList.length} models from /models/list endpoint');
+              modelsList.forEach((model) => debugPrint('Available model: ${model.modelId}'));
+            }
+            
             return modelsList;
           } else {
             debugPrint('Unexpected response format: ${response.body}');
@@ -200,7 +106,7 @@ class ModelService {
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
-          'X-Username': 'default_user', // Add username header for auth
+          'X-Username': defaultObjectId,
         },
       ).timeout(const Duration(seconds: 10));
       
@@ -224,12 +130,11 @@ class ModelService {
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
-          'X-Username': 'default_user', // Add username header for auth
+          'X-Username': defaultObjectId,
         },
         body: json.encode({
           'max_input_tokens': model.maxInputTokens,
           'max_output_tokens': model.maxOutputTokens,
-          'max_total_tokens': model.maxTotalTokens,
           'input_price_per_token': model.inputPricePerToken,
           'output_price_per_token': model.outputPricePerToken,
         }),
@@ -247,77 +152,25 @@ class ModelService {
   }
   
   Future<List<LLMModel>> syncModels({String? userId, String? username}) async {
+    debugPrint('Syncing models is redirected to use only /models/list endpoint');
+    
+    // As per backend requirements, only use the /models/list endpoint with no auth or user info
     try {
-      debugPrint('Syncing models with backend URL: $_baseUrl');
+      debugPrint('Using only the /models/list endpoint as directed (plain call with no user info)');
       
-      if ((userId == null || userId.isEmpty) && (username == null || username.isEmpty)) {
-        debugPrint('No user information provided for model sync, using default flow');
-        return getModels(); // Fall back to regular model fetch if no user info
+      // Ignore any provided user identification parameters - don't send them
+      if (userId != null && !userId.isEmpty) {
+        debugPrint('Note: userId $userId was provided but will not be used');
+      }
+      if (username != null && !username.isEmpty) {
+        debugPrint('Note: username $username was provided but will not be used');
       }
       
-      // Construct the correct URL for the sync endpoint
-      final uri = Uri.parse('$_baseUrl/models/sync');
-      
-      // Only add user_id param if it exists and is valid
-      final Map<String, String> queryParams = {};
-      if (userId != null && userId.isNotEmpty) {
-        queryParams['user_id'] = userId;
-      }
-      
-      final uriWithParams = uri.replace(queryParameters: queryParams);
-      debugPrint('Syncing models from: $uriWithParams');
-      
-      // Use username for X-Username header if available, otherwise fallback to userId
-      final String authUsername = username ?? userId ?? '';
-      debugPrint('Using authentication username: $authUsername');
-      
-      // Using POST to trigger model sync with LiteLLM
-      final response = await _client.post(
-        uriWithParams,
-        headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
-          'X-Username': authUsername, // Use username for auth header
-        },
-      ).timeout(const Duration(seconds: 30)); // Longer timeout for sync
-      
-      debugPrint('Models sync response status: ${response.statusCode}');
-      
-      if (response.statusCode == 200) {
-        try {
-          final data = json.decode(response.body);
-          if (data is List) {
-            final modelsList = data.map((json) => LLMModel.fromJson(json)).toList();
-            debugPrint('Synced ${modelsList.length} models successfully');
-            return modelsList;
-          } else {
-            debugPrint('Unexpected response format: ${response.body}');
-            return [];
-          }
-        } catch (parseError) {
-          debugPrint('Error parsing models response: $parseError');
-          debugPrint('Response body: ${response.body}');
-          return [];
-        }
-      }
-      
-      // Handle various error statuses
-      if (response.statusCode == 404) {
-        debugPrint('Sync endpoint not found: ${response.body}');
-        return getModels(); // Fall back to regular model fetch
-      } else if (response.statusCode == 401 || response.statusCode == 403) {
-        debugPrint('Authentication error when syncing models: ${response.body}');
-        return getModels(); // Fall back to regular model fetch
-      } else if (response.statusCode == 500) {
-        debugPrint('Server error when syncing models: ${response.body}');
-        return getModels(); // Fall back to regular model fetch
-      }
-      
-      debugPrint('Failed to sync models: ${response.statusCode} - ${response.body}');
-      return getModels(); // Fall back to regular model fetch in case of errors
+      // Simply call getModels which makes a plain call without user identification
+      return await getModels();
     } catch (e) {
-      debugPrint('Error syncing models: $e');
-      return getModels(); // Fall back to regular model fetch in case of exceptions
+      debugPrint('Error fetching models: $e');
+      return [];
     }
   }
   

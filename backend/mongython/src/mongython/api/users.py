@@ -205,24 +205,38 @@ async def get_user(user_name: str):
     },
 )
 async def delete_user(user_name: str):
-    try:
-        user = await User.find_one(User.username == user_name)
-        if not user:
-            logger.warning(f"Attempted to delete non-existent user: {user_name}")
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
-            )
-        await user.delete()
-        logger.info(f"User deleted: {user_name}")
-        return Response(status_code=status.HTTP_204_NO_CONTENT)
-    except Exception as e:
-        if not isinstance(e, HTTPException):
-            logger.error(f"Error deleting user {user_name}: {e}")
+    if user_name == "all":
+        try:
+            users = await User.find_all().to_list()
+            for user in users:
+                await user.delete()
+            logger.info(f"Successfully deleted all users: {len(users)} users removed")
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+        except Exception as e:
+            logger.error(f"Error deleting all users: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Error deleting user",
+                detail=f"Error deleting all users: {str(e)}",
             )
-        raise
+    else:
+        try:
+            user = await User.find_one(User.username == user_name)
+            if not user:
+                logger.warning(f"Attempted to delete non-existent user: {user_name}")
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+                )
+            await user.delete()
+            logger.info(f"User deleted: {user_name}")
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+        except Exception as e:
+            if not isinstance(e, HTTPException):
+                logger.error(f"Error deleting user {user_name}: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Error deleting user",
+                )
+            raise
 
 
 @router.post(
