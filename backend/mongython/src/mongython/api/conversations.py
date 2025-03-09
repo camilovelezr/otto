@@ -503,11 +503,15 @@ async def generate_conversation_title(conversation: Conversation) -> Optional[st
 
 
 @router.delete("/all", response_model=dict)
-async def delete_all_conversations():
+async def delete_all_conversations(
+    current_user: User = Depends(get_current_user),
+):
     """Delete all conversations."""
     try:
         # Find all conversations for the current user
-        conversations = await Conversation.find().to_list()
+        conversations = await Conversation.find(
+            Conversation.user.id == current_user.id
+        ).to_list()
 
         # Delete all messages for each conversation
         for conversation in conversations:

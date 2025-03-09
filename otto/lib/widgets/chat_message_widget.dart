@@ -1,21 +1,25 @@
-import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
-import 'package:flutter_markdown/flutter_markdown.dart';
-import 'package:markdown/markdown.dart' as md;
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
-import '../models/chat_message.dart';
-import '../theme/theme_provider.dart';
+import 'package:flutter/gestures.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' hide TextSelectionHandleType;
 import 'package:flutter/services.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'dart:ui';  // For FontFeature
+import 'package:flutter_animate/flutter_animate.dart';
+import 'package:flutter_chat_types/flutter_chat_types.dart' as types;
+import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:markdown/markdown.dart' as md;
 import 'package:flutter_highlight/flutter_highlight.dart';
 import 'package:flutter_highlight/themes/atom-one-dark.dart';
 import 'package:flutter_highlight/themes/atom-one-light.dart';
-import 'dart:math';
-import 'dart:ui' as ui;
+import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart' as url_launcher;
-import 'package:flutter/gestures.dart';
 import 'dart:async';
+import 'dart:math' as math;
+import 'dart:ui' as ui;
+import '../models/chat_message.dart';
+import '../theme/theme_provider.dart';
 
 extension ColorExtension on Color {
   Color darken([double amount = 0.1]) {
@@ -68,9 +72,33 @@ class CursorlessSelectionControls extends MaterialTextSelectionControls {
   }
   
   @override
-  Widget buildHandle(BuildContext context, TextSelectionHandleType type, double textLineHeight, [VoidCallback? onTap]) {
-    // We still want handles for selection
-    return super.buildHandle(context, type, textLineHeight, onTap);
+  bool canSelectAll(TextSelectionDelegate delegate) {
+    // Always allow "Select All" functionality
+    return true;
+  }
+  
+  @override
+  Widget buildHandle(BuildContext context, TextSelectionHandleType type, double textHeight, [VoidCallback? onTap]) {
+    // Make the selection handles slightly larger for better usability
+    final Widget handle = SizedBox(
+      width: 22.0,
+      height: 22.0,
+      child: CustomPaint(
+        painter: _HandlePainter(
+          color: Theme.of(context).textSelectionTheme.selectionHandleColor ?? Theme.of(context).colorScheme.primary,
+        ),
+      ),
+    );
+
+    // Forward taps to the given callback
+    if (onTap != null) {
+      return GestureDetector(
+        onTap: onTap,
+        child: handle,
+      );
+    }
+    
+    return handle;
   }
   
   // Override this to ensure cursor is never drawn
@@ -79,6 +107,25 @@ class CursorlessSelectionControls extends MaterialTextSelectionControls {
     // Return an empty container instead of a cursor
     return Container();
   }
+}
+
+// Custom painter for selection handles
+class _HandlePainter extends CustomPainter {
+  final Color color;
+  
+  _HandlePainter({required this.color});
+  
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Paint paint = Paint()..color = color;
+    final radius = size.width / 2;
+    
+    // Draw a circle for the handle
+    canvas.drawCircle(Offset(radius, radius), radius, paint);
+  }
+  
+  @override
+  bool shouldRepaint(_HandlePainter oldDelegate) => color != oldDelegate.color;
 }
 
 class ChatMessageWidget extends StatefulWidget {
@@ -215,6 +262,15 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
     final contentBgColor =
         isDark ? const Color(0xFF282C34) : const Color(0xFFFAFAFA);
 
+    // Convert nullable String? to non-nullable String
+    final String displayLanguage = language ?? '';
+    final bool isEmptyLanguage = displayLanguage.isEmpty;
+    
+    // Clean the code for display
+    final String cleanCode = code
+        .replaceAll(RegExp(r'\r\n|\r'), '\n')
+        .replaceAll(RegExp(r'\n\s*\n'), '\n\n');
+
     return Material(
       color: contentBgColor,
       borderRadius: BorderRadius.circular(8),
@@ -230,7 +286,7 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
-                    language ?? 'plain text',
+                    isEmptyLanguage ? 'code' : displayLanguage,
                     style: theme.textTheme.bodySmall!.copyWith(
                       color: isDark
                           ? const Color(0xFF9DA5B4)
@@ -241,10 +297,6 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
                     cursor: SystemMouseCursors.click,
                     child: GestureDetector(
                       onTap: () {
-                        // Clean the code before copying.
-                        final cleanCode = code
-                            .replaceAll(RegExp(r'\r\n|\r'), '\n')
-                            .replaceAll(RegExp(r'\n\s*\n'), '\n\n');
                         Clipboard.setData(ClipboardData(text: cleanCode));
                       },
                       child: Icon(
@@ -263,10 +315,8 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             child: CodeContentWidget(
-              code: code
-                  .replaceAll(RegExp(r'\r\n|\r'), '\n')
-                  .replaceAll(RegExp(r'\n\s*\n'), '\n\n'),
-              language: language ?? 'plaintext',
+              code: cleanCode,
+              language: isEmptyLanguage ? null : displayLanguage,
               isDark: isDark,
             ),
           ),
@@ -491,25 +541,10 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget>
                                             if (widget.isStreaming) {
                                               // When streaming, only use the streamed content
                                               content = widget.streamedContent;
-                                              debugPrint('Using streaming content: ${content.length} chars'); 
                                             } else {
                                               // When not streaming, only use the message's content
                                               content = widget.message.content;
-                                              debugPrint('Using message content: ${content.length} chars');
                                             }
-                                            
-                                            // Preprocess markdown content
-                                            content = content.replaceAllMapped(
-                                              RegExp(r'<[^>]+>'),
-                                              (match) => '`${match.group(0)}`',
-                                            );
-                                            
-                                            // Normalize line endings and reduce excessive empty lines
-                                            content = content.replaceAll(RegExp(r'\r\n|\r'), '\n');
-                                            content = content.replaceAll(RegExp(r'\n{3,}'), '\n\n');
-                                            
-                                            // Remove trailing whitespace from lines which can cause selection issues
-                                            content = content.split('\n').map((line) => line.trimRight()).join('\n');
                                             
                                             return LayoutBuilder(
                                               builder: (context, constraints) {
@@ -704,19 +739,23 @@ String _processContent(String content) {
   return processedLines.join('\n');
 }
 
-/// Renders markdown text. (Code blocks inside markdown are handled via WidgetSpan.)
-class SelectableMarkdown extends StatelessWidget {
+/// Renders markdown text with proper formatting and selection support.
+/// This implementation handles lists, headers, code blocks, and other markdown elements correctly.
+/// It ensures continuous text selection across elements while preserving proper styling.
+class SelectableMarkdown extends StatefulWidget {
   final String data;
   final TextStyle? baseStyle;
   final bool isDark;
   final bool isStreaming;
+  final EdgeInsets contentPadding;
+  final ScrollPhysics physics;
+  final bool enableInteractiveSelection;
 
-  // Adjusted spacing constants for better visual hierarchy
-  static const double _blockSpacing = 16.0;     // Increased for better section breaks
-  static const double _inlineSpacing = 8.0;     
-  static const double _listItemSpacing = 4.0;   
-  static const double _headerBottomSpacing = 12.0; // Increased for better header separation
-  static const double _paragraphSpacing = 10.0;  // Increased for more paragraph separation
+  // Spacing constants for better visual hierarchy
+  static const double _blockSpacing = 12.0; // Reduced from 16.0
+  static const double _listItemSpacing = 3.0; // Reduced from 4.0
+  static const double _paragraphSpacing = 6.0; // Reduced from 8.0
+  static const double _headerBottomSpacing = 10.0; // Reduced from 12.0
   
   const SelectableMarkdown({
     Key? key,
@@ -724,710 +763,1443 @@ class SelectableMarkdown extends StatelessWidget {
     this.baseStyle,
     required this.isDark,
     this.isStreaming = false,
+    this.contentPadding = EdgeInsets.zero,
+    this.physics = const ClampingScrollPhysics(),
+    this.enableInteractiveSelection = true,
   }) : super(key: key);
+  
+  @override
+  State<SelectableMarkdown> createState() => _SelectableMarkdownState();
+}
 
+class _SelectableMarkdownState extends State<SelectableMarkdown> {
+  // Handle code block rendering with state tracking
+  // Map to keep track of selection state for each code block
+  final Map<String, TextSelection?> _codeSelections = {};
+  
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final defaultStyle = widget.baseStyle ?? theme.textTheme.bodyLarge!.copyWith(
+      color: widget.isDark ? Colors.white : theme.colorScheme.onSurface,
+      height: 1.5,
+    );
     
-    // Cache key to prevent unnecessary rebuilds
-    final cacheKey = Object.hash(data, isStreaming, isDark);
+    // Process the markdown content
+    final processedContent = _preprocessMarkdown(widget.data);
     
-    // Parse markdown content using the dart:markdown package
+    // Parse the markdown
     final document = md.Document(
       encodeHtml: false,
       extensionSet: md.ExtensionSet.gitHubWeb,
+      inlineSyntaxes: [
+        // Add custom inline syntaxes for better rendering of combined styles
+        md.StrikethroughSyntax(),
+      ],
     );
     
-    // Preprocess content to reduce excessive newlines and trim whitespace
-    String processedData = data
-        .replaceAll(RegExp(r'\r\n|\r'), '\n')          // Normalize line endings
-        .replaceAll(RegExp(r'\n{3,}'), '\n\n')         // Limit consecutive newlines
-        .replaceAll(RegExp(r' +$', multiLine: true), ''); // Remove trailing whitespace
+    final nodes = document.parse(processedContent);
     
-    final nodes = document.parse(processedData);
+    // Build spans with proper structure
+    return Padding(
+      padding: widget.contentPadding,
+      child: ScrollConfiguration(
+        behavior: ScrollConfiguration.of(context).copyWith(
+          scrollbars: false,
+          overscroll: false,
+          physics: widget.physics,
+          dragDevices: {
+            PointerDeviceKind.touch,
+            PointerDeviceKind.mouse,
+            PointerDeviceKind.trackpad,
+            PointerDeviceKind.stylus,
+          },
+        ),
+        child: SelectableRegion(
+          focusNode: AlwaysDisabledFocusNode(),
+          selectionControls: MaterialTextSelectionControls(),
+          child: SelectableText.rich(
+            TextSpan(
+              children: _buildSpans(nodes, context, theme, defaultStyle),
+              style: defaultStyle,
+            ),
+            selectionControls: MaterialTextSelectionControls(),
+            enableInteractiveSelection: widget.enableInteractiveSelection,
+          ),
+        ),
+      ),
+    );
+  }
+  
+  // Preprocess markdown for better rendering
+  String _preprocessMarkdown(String content) {
+    // Normalize line endings
+    String processed = content.replaceAll('\r\n', '\n');
     
-    // Function to collect textual content with spans for each style
-    List<InlineSpan> buildFormattedContent() {
-      final spans = <InlineSpan>[];
+    // Replace multiple newlines with just two for proper paragraph separation
+    processed = processed.replaceAll(RegExp(r'\n{3,}'), '\n\n');
+    
+    // Fix common issues with nested styles (like *text **bold** text*)
+    // Ensure proper nesting of strong/em tags for the parser
+    processed = processed.replaceAll(RegExp(r'(\*\*\*|\*\*\_|\_\*\*)'), '**_');
+    processed = processed.replaceAll(RegExp(r'(\_\_\*|\_\*\*|\*\_\_)'), '**_');
+    
+    // Special handling for code blocks - PRESERVE EXACT INDENTATION
+    // DO NOT modify any whitespace inside code blocks
+    final List<String> lines = processed.split('\n');
+    bool inCodeBlock = false;
+    List<String> processedLines = [];
+    List<String> currentCodeBlock = [];
+    
+    for (int i = 0; i < lines.length; i++) {
+      String line = lines[i];
       
-      void processNode(md.Node node, {TextStyle? currentStyle, 
-          int listLevel = 0, bool isOrderedList = false, String? parentTag}) {
-        if (node is md.Element) {
-          TextStyle? newStyle;
-          String? prefix;
-          String? suffix;
+      // Check if this line starts or ends a code block
+      if (line.trimLeft().startsWith('```')) {
+        inCodeBlock = !inCodeBlock;
+        
+        // If starting a code block, add the opening fence and continue
+        if (inCodeBlock) {
+          processedLines.add(line);
+          currentCodeBlock = [];
+        } else {
+          // If ending a code block, add ALL the code lines with EXACT indentation
+          processedLines.addAll(currentCodeBlock);
           
-          switch (node.tag) {
-            case 'p':
-              if (nodes.isNotEmpty && node != nodes.first) {
-                // Add improved paragraph spacing for better readability
-                spans.add(WidgetSpan(
-                  child: SizedBox(height: _paragraphSpacing),
-                ));
-              }
-              // Add newline after paragraphs to ensure proper text flow
-              suffix = '\n';
-              // Use consistent text style for paragraphs
-              newStyle = (baseStyle ?? theme.textTheme.bodyLarge)?.copyWith(
-                height: 1.5,
-                color: isDark ? Colors.white : theme.colorScheme.onSurface,
-              );
-              break;
-            case 'img':
-              // Handle image tags safely
-              final String? src = node.attributes['src'];
-              final String alt = node.attributes['alt'] ?? 'Image';
-              
-              if (src != null && src.isNotEmpty) {
-                spans.add(WidgetSpan(
-                  child: Container(
-                    margin: EdgeInsets.symmetric(vertical: _blockSpacing),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        if (src.startsWith('http'))
-                          Image.network(
-                            src,
-                            errorBuilder: (context, error, stackTrace) {
-                              return Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: isDark ? Colors.grey[850] : Colors.grey[200],
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Column(
-                                  children: [
-                                    Icon(Icons.broken_image, color: isDark ? Colors.grey[400] : Colors.grey[700]),
-                                    const SizedBox(height: 4),
-                                    Text('Failed to load image', style: TextStyle(
-                                      fontSize: 12,
-                                      color: isDark ? Colors.grey[400] : Colors.grey[700],
-                                    )),
-                                  ],
-                                ),
-                              );
-                            },
-                          )
-                        else
-                          Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: isDark ? Colors.grey[850] : Colors.grey[200],
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Text('Unsupported image source: $alt',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: isDark ? Colors.grey[400] : Colors.grey[700],
-                              ),
-                            ),
-                          ),
-                        if (alt.isNotEmpty && alt != 'Image')
-                          Padding(
-                            padding: const EdgeInsets.only(top: 4),
-                            child: Text(
-                              alt,
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontStyle: FontStyle.italic,
-                                color: isDark ? Colors.grey[400] : Colors.grey[700],
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ));
-              } else {
-                // If no source, just show alt text or placeholder
-                spans.add(TextSpan(
-                  text: alt.isNotEmpty ? alt : '[Image]',
-                  style: const TextStyle(fontStyle: FontStyle.italic),
-                ));
-              }
-              return;
-            case 'h1':
-              if (nodes.isNotEmpty && node != nodes.first) {
-                // Ensure proper vertical spacing before headers
-                spans.add(WidgetSpan(
-                  child: SizedBox(height: _blockSpacing * 1.2),
-                ));
-              }
-              newStyle = theme.textTheme.headlineMedium!.copyWith(
-                color: isDark ? Colors.white : theme.colorScheme.onSurface,
-                fontWeight: FontWeight.bold,
-                height: 1.5,
-              );
-              // Critical: Add explicit newline after headers
-              suffix = '\n';
-              // Add extra spacing after header
-              spans.add(WidgetSpan(
-                child: SizedBox(height: _headerBottomSpacing),
-              ));
-              break;
-            case 'h2':
-              if (nodes.isNotEmpty && node != nodes.first) {
-                // Ensure proper vertical spacing before headers
-                spans.add(WidgetSpan(
-                  child: SizedBox(height: _blockSpacing * 1.2),
-                ));
-              }
-              newStyle = theme.textTheme.headlineSmall!.copyWith(
-                color: isDark ? Colors.white : theme.colorScheme.onSurface,
-                fontWeight: FontWeight.bold,
-                height: 1.5,
-              );
-              // Critical: Add explicit newline after headers
-              suffix = '\n';
-              // Add extra spacing after header
-              spans.add(WidgetSpan(
-                child: SizedBox(height: _headerBottomSpacing),
-              ));
-              break;
-            case 'h3':
-              if (nodes.isNotEmpty && node != nodes.first) {
-                // Ensure proper vertical spacing before headers
-                spans.add(WidgetSpan(
-                  child: SizedBox(height: _blockSpacing),
-                ));
-              }
-              newStyle = theme.textTheme.titleLarge!.copyWith(
-                color: isDark ? Colors.white : theme.colorScheme.onSurface,
-                fontWeight: FontWeight.bold,
-                height: 1.5,
-              );
-              // Critical: Add explicit newline after headers
-              suffix = '\n';
-              // Add extra spacing after header
-              spans.add(WidgetSpan(
-                child: SizedBox(height: _headerBottomSpacing),
-              ));
-              break;
-            case 'h4':
-              if (nodes.isNotEmpty && node != nodes.first) {
-                // Ensure proper vertical spacing before headers
-                spans.add(WidgetSpan(
-                  child: SizedBox(height: _inlineSpacing),
-                ));
-                // Remove duplicate newlines
-              }
-              newStyle = theme.textTheme.titleMedium!.copyWith(
-                color: isDark ? Colors.white : theme.colorScheme.onSurface,
-                fontWeight: FontWeight.bold,
-                height: 1.5,
-              );
-              suffix = '\n';
-              // Add extra spacing after header
-              spans.add(WidgetSpan(
-                child: SizedBox(height: _headerBottomSpacing * 0.75),
-              ));
-              break;
-            case 'h5':
-            case 'h6':
-              if (nodes.isNotEmpty && node != nodes.first) {
-                // Ensure proper vertical spacing before headers
-                spans.add(WidgetSpan(
-                  child: SizedBox(height: _inlineSpacing),
-                ));
-                // Remove duplicate newlines
-              }
-              newStyle = theme.textTheme.titleSmall!.copyWith(
-                color: isDark ? Colors.white : theme.colorScheme.onSurface,
-                fontWeight: FontWeight.bold,
-                height: 1.5,
-              );
-              suffix = '\n';
-              // Add extra spacing after header
-              spans.add(WidgetSpan(
-                child: SizedBox(height: _headerBottomSpacing * 0.5),
-              ));
-              break;
-            case 'pre':
-              // Handle code blocks
-              if (node.children != null && node.children!.isNotEmpty && 
-                  node.children!.first is md.Element && 
-                  (node.children!.first as md.Element).tag == 'code') {
-                
-                final codeElement = node.children!.first as md.Element;
-                String language = '';
-                
-                if (codeElement.attributes['class'] != null) {
-                  final String langClass = codeElement.attributes['class'] as String;
-                  language = langClass.startsWith('language-') 
-                      ? langClass.substring(9) 
-                      : '';
-                }
-                
-                final code = codeElement.textContent;
-                
-                // Add proper spacing before code blocks
-                if (nodes.isNotEmpty && node != nodes.first) {
-                  spans.add(WidgetSpan(
-                    child: SizedBox(height: _blockSpacing * 0.8),
-                  ));
-                  // Remove duplicate newlines
-                }
-                
-                // Add a placeholder for the code block with consistent spacing
-                spans.add(WidgetSpan(
-                  child: Container(
-                    margin: EdgeInsets.symmetric(vertical: _blockSpacing * 0.7),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(8),
-                      boxShadow: [
-                        BoxShadow(
-                          color: isDark 
-                              ? Colors.black.withOpacity(0.2) 
-                              : Colors.black.withOpacity(0.05),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: CodeContentWidget(
-                      code: code,
-                      language: language,
-                      isDark: isDark,
-                    ),
-                  ),
-                ));
-                
-                // Add proper spacing after code blocks
-                if (nodes.isNotEmpty && node != nodes.last) {
-                  spans.add(WidgetSpan(
-                    child: SizedBox(height: _blockSpacing * 0.8),
-                  ));
-                  // Remove duplicate newlines
-                }
-                return;
-              }
-              break;
-            case 'blockquote':
-              // Add proper spacing before blockquotes
-              if (nodes.isNotEmpty && node != nodes.first) {
-                spans.add(WidgetSpan(
-                  child: SizedBox(height: _blockSpacing),
-                ));
-                // Remove duplicate newlines
-              }
-              
-              // Create a better looking blockquote with left border
-              final blockquoteStyle = theme.textTheme.bodyLarge!.copyWith(
-                color: isDark 
-                    ? Colors.white70 
-                    : theme.colorScheme.onSurface.withOpacity(0.8),
-                height: 1.5,
-                fontStyle: FontStyle.italic,
-              );
-              
-              // Build a widget-based blockquote instead of text prefixes
-              if (node.children != null) {
-                spans.add(WidgetSpan(
-                  child: Container(
-                    margin: EdgeInsets.symmetric(vertical: _inlineSpacing),
-                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                    decoration: BoxDecoration(
-                      border: Border(
-                        left: BorderSide(
-                          color: isDark 
-                              ? Colors.white30 
-                              : theme.colorScheme.primary.withOpacity(0.3),
-                          width: 3,
-                        ),
-                      ),
-                      color: isDark 
-                          ? Colors.white.withOpacity(0.03) 
-                          : theme.colorScheme.primary.withOpacity(0.03),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: node.children!.map((child) {
-                        if (child is md.Element && child.tag == 'p') {
-                          final textContent = StringBuffer();
-                          _extractTextFromNode(child, textContent);
-                          
-                          return Padding(
-                            padding: EdgeInsets.only(
-                              bottom: child != node.children!.last ? _paragraphSpacing * 0.8 : 0,
-                            ),
-                            child: Text(
-                              textContent.toString(),
-                              style: blockquoteStyle,
-                            ),
-                          );
-                        } else {
-                          final textContent = StringBuffer();
-                          _extractTextFromNode(child, textContent);
-                          
-                          return Text(
-                            textContent.toString(),
-                            style: blockquoteStyle,
-                          );
-                        }
-                      }).toList(),
-                    ),
-                  ),
-                ));
-              }
-              
-              // Add proper spacing after blockquotes
-              if (nodes.isNotEmpty && node != nodes.last) {
-                spans.add(WidgetSpan(
-                  child: SizedBox(height: _blockSpacing),
-                ));
-              }
-              return;
-            case 'ul':
-              // Add proper spacing before lists
-              if (nodes.isNotEmpty && node != nodes.first) {
-                spans.add(WidgetSpan(
-                  child: SizedBox(height: _blockSpacing),
-                ));
-              }
-              
-              // Use a more visually appealing approach for lists
-              if (node.children != null) {
-                for (int i = 0; i < node.children!.length; i++) {
-                  final child = node.children![i];
-                  if (child is md.Element && child.tag == 'li') {
-                    final isLastItem = i == node.children!.length - 1;
-                    
-                    // For formatting the bullet with consistent indentation
-                    final indent = '  ' * listLevel;
-                    final bulletChar = listLevel == 0 ? '•' : '◦'; // Different bullet for nested lists
-                    
-                    spans.add(TextSpan(
-                      text: '$indent$bulletChar ',
-                      style: (currentStyle ?? baseStyle)?.copyWith(
-                        color: isDark 
-                            ? theme.colorScheme.primary.withOpacity(0.8) 
-                            : theme.colorScheme.primary,
-                        height: 1.5,
-                      ),
-                    ));
-                    
-                    // Process the list item content with proper style
-                    final listItemStyle = (currentStyle ?? baseStyle)?.copyWith(
-                      height: 1.5,
-                    );
-                    
-                    // Process the list item content
-                    if (child.children != null) {
-                      for (final grandchild in child.children!) {
-                        processNode(
-                          grandchild,
-                          currentStyle: listItemStyle, 
-                          listLevel: listLevel + 1, 
-                          parentTag: child.tag
-                        );
-                      }
-                    }
-                    
-                    // Add appropriate spacing between list items
-                    if (!isLastItem) {
-                      spans.add(WidgetSpan(
-                        child: SizedBox(height: _listItemSpacing),
-                      ));
-                      // Remove duplicate newlines
-                    }
-                  }
-                }
-              }
-              
-              // Add proper spacing after lists
-              if (listLevel == 0 && nodes.isNotEmpty && node != nodes.last) {
-                spans.add(WidgetSpan(
-                  child: SizedBox(height: _blockSpacing),
-                ));
-              }
-              return;
+          // Add the closing fence
+          processedLines.add(line);
+        }
+      } else if (inCodeBlock) {
+        // Inside a code block, collect the line with EXACT indentation and formatting
+        // Only handle tabs consistently (convert to spaces)
+        currentCodeBlock.add(line.replaceAll('\t', '    '));
+      } else {
+        // Outside a code block, process normally
+        processedLines.add(line.trimRight());
+      }
+    }
+    
+    // In case we ended with an open code block
+    if (inCodeBlock) {
+      // Add ALL code block lines without modification to their indentation
+      processedLines.addAll(currentCodeBlock);
+      processedLines.add('```'); // Close the code block
+    }
+    
+    // Join all lines back and return the processed content
+    processed = processedLines.join('\n').trimRight();
+    
+    return processed;
+  }
+
+  // Main method to build all spans for the markdown content
+  List<InlineSpan> _buildSpans(List<md.Node> nodes, BuildContext context, ThemeData theme, TextStyle defaultStyle) {
+    final spans = <InlineSpan>[];
+    
+    // Process each node
+    for (final node in nodes) {
+      spans.addAll(_processNode(node, context, theme, defaultStyle));
+    }
+    
+    // Add streaming cursor if needed
+    if (widget.isStreaming) {
+      spans.add(WidgetSpan(
+        alignment: PlaceholderAlignment.middle,
+        child: StreamingCursorInline(isDark: widget.isDark, theme: theme),
+      ));
+    }
+    
+    return spans;
+  }
+
+  // Process a single node and convert it to spans
+  List<InlineSpan> _processNode(md.Node node, BuildContext context, ThemeData theme, TextStyle style, {int listLevel = 0}) {
+    final spans = <InlineSpan>[];
+    
+    if (node is md.Element) {
+      switch (node.tag) {
+        case 'p':
+          // Process paragraph content
+          spans.addAll(_processInlineElements(node.children!, context, theme, style));
+          spans.add(const TextSpan(text: '\n')); // Single newline for paragraphs
+          break;
+          
+        case 'h1':
+        case 'h2':
+        case 'h3':
+        case 'h4':
+        case 'h5':
+        case 'h6':
+          // Process header content with appropriate styling and proper visual distinction
+          final level = int.parse(node.tag.substring(1));
+          final headerStyle = _getHeaderStyle(level, theme, style);
+          
+          // Add spacing before the header
+          if (level <= 2) {
+            // More space before major headings
+            spans.add(const TextSpan(text: '\n\n'));
+          } else {
+            spans.add(const TextSpan(text: '\n'));
+          }
+          
+          // Add the header text with proper styling
+          spans.add(TextSpan(
+            text: node.textContent,
+            style: headerStyle,
+          ));
+          
+          // Add proper spacing after headers
+          spans.add(const TextSpan(text: '\n'));
+          break;
+          
+        case 'ul':
+        case 'ol':
+          // Process list with proper indentation
+          spans.addAll(_buildListSpans(node, context, theme, style, listLevel));
+          if (listLevel == 0) {
+            spans.add(const TextSpan(text: '\n'));
+          }
+          break;
+          
+        case 'li':
+          // Should be handled in _buildListSpans
+          break;
+          
+        case 'pre':
+          // Handle code blocks - this case handles fenced code blocks with triple backticks
+          if (node.children != null && node.children!.isNotEmpty) {
+            md.Element? codeNode;
             
-            case 'ol':
-              // Add proper spacing before ordered lists
-              if (nodes.isNotEmpty && node != nodes.first) {
-                spans.add(WidgetSpan(
-                  child: SizedBox(height: _blockSpacing),
-                ));
+            // Find the code node within the pre element
+            for (final child in node.children!) {
+              if (child is md.Element && child.tag == 'code') {
+                codeNode = child;
+                break;
+              }
+            }
+            
+            if (codeNode != null) {
+              // Extract language from the class attribute if it exists
+              String language = '';
+              if (codeNode.attributes.containsKey('class')) {
+                final String langClass = codeNode.attributes['class'] as String;
+                if (langClass.startsWith('language-')) {
+                  language = langClass.substring(9);
+                }
               }
               
-              // Use a more visually appealing approach for ordered lists
-              int index = 1;
-              if (node.children != null) {
-                for (int i = 0; i < node.children!.length; i++) {
-                  final child = node.children![i];
-                  if (child is md.Element && child.tag == 'li') {
-                    final isLastItem = i == node.children!.length - 1;
-                    
-                    // For formatting the number with consistent indentation
-                    final indent = '  ' * listLevel;
-                    final number = '$index.';
-                    
-                    spans.add(TextSpan(
-                      text: '$indent$number ',
-                      style: (currentStyle ?? baseStyle)?.copyWith(
-                        color: isDark 
-                            ? theme.colorScheme.primary.withOpacity(0.8)
-                            : theme.colorScheme.primary,
-                        fontWeight: FontWeight.w600,
-                        height: 1.5,
-                      ),
-                    ));
-                    
-                    // Process the list item content with proper style
-                    final listItemStyle = (currentStyle ?? baseStyle)?.copyWith(
-                      height: 1.5,
-                    );
-                    
-                    // Process the list item content
-                    if (child.children != null) {
-                      for (final grandchild in child.children!) {
-                        processNode(
-                          grandchild,
-                          currentStyle: listItemStyle, 
-                          listLevel: listLevel + 1, 
-                          isOrderedList: true,
-                          parentTag: child.tag
-                        );
-                      }
-                    }
-                    
-                    index++;
-                    
-                    // Add appropriate spacing between list items
-                    if (!isLastItem) {
-                      spans.add(WidgetSpan(
-                        child: SizedBox(height: _listItemSpacing),
-                      ));
-                      // Remove duplicate newlines
+              // If we don't have a language from the class attribute, try to detect it from the first line
+              if (language.isEmpty && codeNode.textContent.trim().isNotEmpty) {
+                final content = codeNode.textContent;
+                final firstLine = content.split('\n').first.trim();
+                
+                // Check if the first line might indicate the language (common pattern in markdown)
+                if (firstLine.startsWith('```')) {
+                  // Extract language - make sure to get the whole language identifier
+                  language = firstLine.substring(3).trim();
+                  
+                  // If language is empty, plaintext, or text, set it to null
+                  if (language.isEmpty || language.toLowerCase() == 'plaintext' || language.toLowerCase() == 'text' || language.toLowerCase() == 'markdown') {
+                    language = '';
+                  }
+                  
+                  // Remove the language indicator line from the code completely
+                  List<String> contentLines = content.split('\n');
+                  if (contentLines.length > 1) {
+                    final newContent = contentLines.sublist(1).join('\n').trimLeft();
+                    // Monkey patch the code node's content
+                    codeNode = md.Element('code', [md.Text(newContent)]);
+                    if (language.isNotEmpty) {
+                      codeNode.attributes['class'] = 'language-$language';
                     }
                   }
                 }
               }
               
-              // Add proper spacing after ordered lists
-              if (listLevel == 0 && nodes.isNotEmpty && node != nodes.last) {
-                spans.add(WidgetSpan(
-                  child: SizedBox(height: _blockSpacing),
-                ));
-              }
-              return;
-            case 'li':
-              if (node.children != null) {
-                for (final child in node.children!) {
-                  processNode(child, 
-                      currentStyle: currentStyle, 
-                      listLevel: listLevel, 
-                      isOrderedList: isOrderedList,
-                      parentTag: node.tag);
+              // Normalize language identifier (handle potential Unicode issues)
+              if (language.isNotEmpty) {
+                language = language.toLowerCase().trim();
+                if (language.startsWith('pyth') || language == 'py') {
+                  // Treat all variations of Python as standard python
+                  language = 'python';
+                } else if (language.startsWith('js')) {
+                  language = 'javascript';
+                } else if (language == 'ts') {
+                  language = 'typescript';
                 }
               }
-              return;
-            case 'br':
-              spans.add(const TextSpan(text: '\n'));
-              return;
-            case 'hr':
-              // Add proper spacing before horizontal rule
-              if (nodes.isNotEmpty && node != nodes.first) {
-                spans.add(WidgetSpan(
-                  child: SizedBox(height: _blockSpacing * 0.8),
-                ));
-                // Remove duplicate newlines
+              
+              // Ensure there's proper spacing before the code block
+              // Don't add a newline right before the code block - this is causing the 'n' character
+              // spans.add(const TextSpan(text: '\n'));
+              
+              // Pass null for language if it's empty
+              final String? languageToUse = (language == null || language.isEmpty) ? null : language;
+              
+              // Check if we need to add a newline character before the code block
+              // Only add a newline if the previous span isn't already a newline
+              if (spans.isNotEmpty) {
+                final lastSpan = spans.last;
+                if (lastSpan is TextSpan && lastSpan.text != null && !lastSpan.text!.endsWith('\n')) {
+                  spans.add(const TextSpan(text: '\n'));
+                }
               }
               
-              // Create a better looking horizontal rule with gradient
               spans.add(WidgetSpan(
-                child: Container(
-                  margin: EdgeInsets.symmetric(vertical: _blockSpacing * 0.5),
-                  height: 1,
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        isDark 
-                            ? Colors.white.withOpacity(0.01) 
-                            : theme.colorScheme.onSurface.withOpacity(0.01),
-                        isDark 
-                            ? Colors.white.withOpacity(0.15) 
-                            : theme.colorScheme.onSurface.withOpacity(0.15),
-                        isDark 
-                            ? Colors.white.withOpacity(0.15) 
-                            : theme.colorScheme.onSurface.withOpacity(0.15),
-                        isDark 
-                            ? Colors.white.withOpacity(0.01) 
-                            : theme.colorScheme.onSurface.withOpacity(0.01),
-                      ],
-                      stops: const [0.0, 0.4, 0.6, 1.0],
-                    ),
-                  ),
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 4.0, bottom: 8.0), // Reduce top padding
+                  child: _buildCodeBlockWidget(context, codeNode.textContent, languageToUse),
                 ),
               ));
               
-              // Add proper spacing after horizontal rule
-              if (nodes.isNotEmpty && node != nodes.last) {
-                spans.add(WidgetSpan(
-                  child: SizedBox(height: _blockSpacing * 0.8),
-                ));
-                // Remove duplicate newlines
-              }
-              return;
-            case 'code':
-              if (parentTag != 'pre') {
-                // Enhanced inline code styling
-                spans.add(TextSpan(
-                  text: node.textContent,
-                  style: GoogleFonts.firaCode(
-                    fontSize: (baseStyle ?? theme.textTheme.bodyMedium)!.fontSize,
-                    color: isDark ? const Color(0xFFD0BCFF) : theme.colorScheme.primary,
-                    backgroundColor: isDark 
-                        ? Colors.black.withOpacity(0.3) 
-                        : theme.colorScheme.primary.withOpacity(0.08),
-                    height: 1.4, // Slightly tighter line height for code
-                    letterSpacing: -0.2, // Adjust letter spacing for code
-                    fontWeight: FontWeight.w500, // Slightly bolder than normal text
-                  ),
-                ));
-                return;
-              }
-              break;
-            case 'em':
-              // Enhanced italic text
-              newStyle = (currentStyle ?? baseStyle ?? theme.textTheme.bodyLarge)?.copyWith(
-                fontStyle: FontStyle.italic,
-                color: isDark ? Colors.white.withOpacity(0.9) : null,
-              );
-              break;
-            case 'strong':
-              // Enhanced bold text
-              newStyle = (currentStyle ?? baseStyle ?? theme.textTheme.bodyLarge)?.copyWith(
-                fontWeight: FontWeight.bold,
-                color: isDark 
-                    ? Colors.white 
-                    : theme.colorScheme.onSurface.withOpacity(0.9),
-              );
-              break;
-            case 'del':
-              // Enhanced strikethrough text
-              newStyle = (currentStyle ?? baseStyle ?? theme.textTheme.bodyLarge)?.copyWith(
-                decoration: TextDecoration.lineThrough,
-                decorationColor: isDark 
-                    ? Colors.white70 
-                    : theme.colorScheme.onSurface.withOpacity(0.7),
-                color: isDark 
-                    ? Colors.white70 
-                    : theme.colorScheme.onSurface.withOpacity(0.7),
-              );
-              break;
-            case 'a':
-              final url = node.attributes['href'] ?? '';
-              
-              // Enhanced link styling
-              newStyle = (currentStyle ?? baseStyle ?? theme.textTheme.bodyLarge)?.copyWith(
-                color: theme.colorScheme.primary,
-                decoration: TextDecoration.underline,
-                decorationColor: theme.colorScheme.primary.withOpacity(0.4),
-                decorationThickness: 1.5,
-                fontWeight: FontWeight.w500,
-              );
-              
-              // Create a tappable text span for links
-              if (url.isNotEmpty) {
-                spans.add(TextSpan(
-                  text: node.textContent,
-                  style: newStyle,
-                  recognizer: TapGestureRecognizer()
-                    ..onTap = () {
-                      _handleMarkdownLinkTap(context, url);
-                    },
-                ));
-                return; // Exit after adding the link
-              }
-              break;
-          }
-          if (prefix != null) {
-            spans.add(TextSpan(
-              text: prefix,
-              style: currentStyle ?? baseStyle,
-            ));
-          }
-          if (node.children != null) {
-            for (final child in node.children!) {
-              processNode(child,
-                  currentStyle: newStyle ?? currentStyle,
-                  listLevel: listLevel,
-                  isOrderedList: isOrderedList,
-                  parentTag: node.tag);
+              // Add spacing after the code block
+              spans.add(const TextSpan(text: '\n')); // Reduced from '\n\n'
             }
           }
-          if (suffix != null) {
+          break;
+          
+        case 'code':
+          // This is for inline code, not code blocks (pre > code)
+          // We need to check if this code element is within a pre element
+          // Since we don't have access to parent, we'll use a flag passed from the calling function
+          if (!_isCodeWithinPre(node)) {
             spans.add(TextSpan(
-              text: suffix,
-              style: currentStyle ?? baseStyle,
+              text: node.textContent,
+              style: GoogleFonts.firaCode(
+                fontSize: style.fontSize,
+                color: widget.isDark ? const Color(0xFFD0BCFF) : theme.colorScheme.primary,
+                backgroundColor: widget.isDark 
+                    ? Colors.black.withOpacity(0.3) 
+                    : theme.colorScheme.primary.withOpacity(0.08),
+                height: 1.4,
+                letterSpacing: -0.2,
+                fontWeight: FontWeight.w500,
+              ),
             ));
           }
-        } else if (node is md.Text) {
-          spans.add(TextSpan(
-            text: node.text,
-            style: currentStyle ?? baseStyle,
-          ));
-        }
-      }
-
-      for (final node in nodes) {
-        processNode(node);
-      }
-
-      // Add streaming cursor at the end if we're streaming
-      if (isStreaming) {
-        spans.add(WidgetSpan(
-          alignment: PlaceholderAlignment.middle,
-          child: StreamingCursorInline(isDark: isDark, theme: theme),
-        ));
-      }
-      
-      return spans;
-    }
-
-    // Use SelectableText.rich for better selection behavior with a memoized content
-    return RepaintBoundary(
-      key: ValueKey(cacheKey),
-      child: SelectableText.rich(
-        TextSpan(
-          children: buildFormattedContent(),
-          style: baseStyle,
-        ),
-        selectionControls: CursorlessSelectionControls(),
-        showCursor: false,
-        cursorWidth: 0,
-        cursorRadius: const Radius.circular(0),
-        cursorColor: Colors.transparent,
-        enableInteractiveSelection: true,
-        contextMenuBuilder: (BuildContext context, EditableTextState editableTextState) {
-          final List<ContextMenuButtonItem> buttonItems = editableTextState.contextMenuButtonItems;
+          break;
           
-          return AdaptiveTextSelectionToolbar.buttonItems(
-            anchors: editableTextState.contextMenuAnchors,
-            buttonItems: buttonItems
-                .where((item) => 
-                    item.type == ContextMenuButtonType.copy || 
-                    item.type == ContextMenuButtonType.selectAll)
-                .toList(),
-          );
-        },
+        case 'blockquote':
+          // Process blockquote content using text spans instead of widgets
+          // This improves selection behavior across blockquotes
+          spans.add(TextSpan(
+            children: _processInlineElements(node.children!, context, theme, 
+              style.copyWith(
+                fontStyle: FontStyle.italic,
+                color: widget.isDark 
+                    ? Colors.white70 
+                    : theme.colorScheme.onSurface.withOpacity(0.8),
+                background: Paint()
+                  ..color = widget.isDark 
+                      ? theme.colorScheme.primary.withOpacity(0.06)
+                      : theme.colorScheme.primary.withOpacity(0.04)
+                  ..style = PaintingStyle.fill,
+              )
+            ),
+            style: TextStyle(
+              // Add left border effect using decoration
+              decoration: TextDecoration.lineThrough,
+              decorationColor: widget.isDark 
+                  ? theme.colorScheme.primary.withOpacity(0.6)
+                  : theme.colorScheme.primary.withOpacity(0.5),
+              decorationThickness: 4.0,
+              // Hide the actual line-through by making it transparent
+              decorationStyle: TextDecorationStyle.solid,
+              background: Paint()
+                ..color = widget.isDark 
+                    ? theme.colorScheme.primary.withOpacity(0.06)
+                    : theme.colorScheme.primary.withOpacity(0.04)
+                ..style = PaintingStyle.fill,
+            ),
+          ));
+          spans.add(const TextSpan(text: '\n\n'));
+          break;
+          
+        case 'hr':
+          // Horizontal rule as text span for better selection
+          spans.add(const TextSpan(text: '\n'));
+          spans.add(WidgetSpan(
+            child: Container(
+              margin: const EdgeInsets.symmetric(vertical: 8.0),
+              height: 1.0,
+              color: widget.isDark ? Colors.grey[700] : Colors.grey[300],
+            ),
+          ));
+          spans.add(const TextSpan(text: '\n')); // Space after horizontal rule
+          break;
+          
+        case 'table':
+          // Handle tables
+          spans.add(WidgetSpan(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6.0), // Reduced from 8.0
+              child: _buildTableWidget(node, context, theme, style),
+            ),
+          ));
+          spans.add(const TextSpan(text: '\n')); // Reduced from '\n\n'
+          break;
+          
+        default:
+          // Process other elements' children
+          if (node.children != null) {
+            spans.addAll(_processInlineElements(node.children!, context, theme, style));
+          }
+          break;
+      }
+    } else if (node is md.Text) {
+      // Handle plain text
+      spans.add(TextSpan(text: node.text, style: style));
+    }
+    
+    return spans;
+  }
+
+  // Helper method to check if a code element is inside a pre element
+  bool _isCodeWithinPre(md.Element codeNode) {
+    // Since we don't have parent access, we can use a heuristic:
+    // If this is a code block, it will likely have a class attribute with language-*
+    if (codeNode.attributes.containsKey('class')) {
+      final classAttr = codeNode.attributes['class'] as String;
+      if (classAttr.startsWith('language-')) {
+        return true;
+      }
+    }
+    
+    // If no class attribute, check content - code blocks tend to be multi-line
+    final content = codeNode.textContent;
+    if (content.contains('\n')) {
+      return true;
+    }
+    
+    // Assume it's an inline code if we get here
+    return false;
+  }
+
+  // Process inline elements like bold, italic, code, links
+  List<InlineSpan> _processInlineElements(List<md.Node> nodes, BuildContext context, ThemeData theme, TextStyle style) {
+    final spans = <InlineSpan>[];
+    
+    for (final node in nodes) {
+      if (node is md.Element) {
+        switch (node.tag) {
+          case 'strong':
+          case 'b':
+            // Bold text - process children to handle nested styles
+            if (node.children != null && node.children!.isNotEmpty) {
+              // Create a style with bold that can combine with other styles
+              final boldStyle = style.copyWith(
+                fontWeight: FontWeight.bold,
+              );
+              
+              spans.addAll(_processInlineElements(
+                node.children!, 
+                context, 
+                theme, 
+                boldStyle,
+              ));
+            } else {
+              spans.add(TextSpan(
+                text: node.textContent,
+                style: style.copyWith(fontWeight: FontWeight.bold),
+              ));
+            }
+            break;
+            
+          case 'em':
+          case 'i':
+            // Italic text - process children to handle nested styles
+            if (node.children != null && node.children!.isNotEmpty) {
+              // Create a style with italic that can combine with other styles
+              final italicStyle = style.copyWith(
+                fontStyle: FontStyle.italic,
+              );
+              
+              spans.addAll(_processInlineElements(
+                node.children!, 
+                context, 
+                theme, 
+                italicStyle,
+              ));
+            } else {
+              spans.add(TextSpan(
+                text: node.textContent,
+                style: style.copyWith(fontStyle: FontStyle.italic),
+              ));
+            }
+            break;
+            
+          case 'code':
+            // Inline code - only if it's not inside a pre tag (code block)
+            if (!_isCodeWithinPre(node)) {
+              spans.add(TextSpan(
+                text: node.textContent,
+                style: GoogleFonts.firaCode(
+                  fontSize: style.fontSize,
+                  color: widget.isDark ? const Color(0xFFD0BCFF) : theme.colorScheme.primary,
+                  backgroundColor: widget.isDark 
+                      ? Colors.black.withOpacity(0.3) 
+                      : theme.colorScheme.primary.withOpacity(0.08),
+                  height: 1.4,
+                  letterSpacing: -0.2,
+                  fontWeight: FontWeight.w500,
+                ),
+              ));
+            }
+            break;
+            
+          case 'a':
+            // Links - process children to handle styled links
+            final url = node.attributes['href'] ?? '';
+            if (node.children != null && node.children!.isNotEmpty) {
+              spans.add(TextSpan(
+                children: _processInlineElements(
+                  node.children!, 
+                  context, 
+                  theme, 
+                  style.copyWith(
+                    color: theme.colorScheme.primary,
+                    decoration: TextDecoration.underline,
+                    decorationColor: theme.colorScheme.primary.withOpacity(0.4),
+                    decorationThickness: 1.5,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                recognizer: TapGestureRecognizer()
+                  ..onTap = () {
+                    _handleMarkdownLinkTap(context, url);
+                  },
+              ));
+            } else {
+              spans.add(TextSpan(
+                text: node.textContent,
+                style: style.copyWith(
+                  color: theme.colorScheme.primary,
+                  decoration: TextDecoration.underline,
+                  decorationColor: theme.colorScheme.primary.withOpacity(0.4),
+                  decorationThickness: 1.5,
+                  fontWeight: FontWeight.w500,
+                ),
+                recognizer: TapGestureRecognizer()
+                  ..onTap = () {
+                    _handleMarkdownLinkTap(context, url);
+                  },
+              ));
+            }
+            break;
+            
+          case 'br':
+            // Line break
+            spans.add(const TextSpan(text: '\n'));
+            break;
+            
+          case 'img':
+            // Images
+            final src = node.attributes['src'] ?? '';
+            final alt = node.attributes['alt'] ?? 'Image';
+            spans.add(WidgetSpan(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8.0),
+                child: _buildImageWidget(src, alt, context, theme),
+              ),
+            ));
+            break;
+            
+          case 'del':
+          case 's':
+            // Strikethrough text - process children to handle nested styles
+            if (node.children != null && node.children!.isNotEmpty) {
+              // Create a new style with strikethrough that can be combined with other styles
+              final strikeThroughStyle = style.copyWith(
+                decoration: TextDecoration.lineThrough,
+                decorationColor: widget.isDark 
+                    ? Colors.white70 
+                    : theme.colorScheme.onSurface.withOpacity(0.7),
+                decorationThickness: 1.5, // Make it slightly thicker for better visibility
+                color: widget.isDark 
+                    ? Colors.white60
+                    : theme.colorScheme.onSurface.withOpacity(0.7),
+              );
+              
+              spans.addAll(_processInlineElements(
+                node.children!, 
+                context, 
+                theme, 
+                strikeThroughStyle,
+              ));
+            } else {
+              spans.add(TextSpan(
+                text: node.textContent,
+                style: style.copyWith(
+                  decoration: TextDecoration.lineThrough,
+                  decorationColor: widget.isDark 
+                      ? Colors.white70 
+                      : theme.colorScheme.onSurface.withOpacity(0.7),
+                  decorationThickness: 1.5, // Make it slightly thicker for better visibility
+                  color: widget.isDark 
+                      ? Colors.white60
+                      : theme.colorScheme.onSurface.withOpacity(0.7),
+                ),
+              ));
+            }
+            break;
+            
+          default:
+            // Process other elements' children
+            if (node.children != null && node.children!.isNotEmpty) {
+              spans.addAll(_processInlineElements(node.children!, context, theme, style));
+            } else if (node.textContent.isNotEmpty) {
+              spans.add(TextSpan(text: node.textContent, style: style));
+            }
+            break;
+        }
+      } else if (node is md.Text) {
+        // Handle plain text
+        spans.add(TextSpan(text: node.text, style: style));
+      }
+    }
+    
+    return spans;
+  }
+
+  // Build list spans with proper indentation and bullets
+  List<InlineSpan> _buildListSpans(md.Element listNode, BuildContext context, ThemeData theme, TextStyle style, int level) {
+    final spans = <InlineSpan>[];
+    final isOrdered = listNode.tag == 'ol';
+    int index = 1;
+    
+    // For top-level lists (level == 0), ensure there's spacing before the list
+    if (level == 0) {
+      spans.add(const TextSpan(text: '\n'));
+    }
+    
+    // Process each list item
+    for (final child in listNode.children!) {
+      if (child is md.Element && child.tag == 'li') {
+        // Add indentation for list items based on level
+        if (level > 0) {
+          // Consistent indentation for nested lists (4 spaces per level)
+          spans.add(TextSpan(text: ' ' * (4 * level)));
+        }
+        
+        // Add item marker (bullet or number) with proper styling
+        final bulletText = isOrdered ? '$index. ' : _getBulletForLevel(level);
+        spans.add(TextSpan(
+          text: bulletText,
+          style: style.copyWith(
+            color: _getBulletColor(theme, level),
+            fontWeight: FontWeight.bold,
+          ),
+        ));
+        
+        // Check if item contains a nested list
+        bool hasNestedList = false;
+        List<md.Node> contentNodes = [];
+        List<md.Element> nestedLists = [];
+        
+        if (child.children != null) {
+          for (final itemChild in child.children!) {
+            if (itemChild is md.Element && (itemChild.tag == 'ul' || itemChild.tag == 'ol')) {
+              hasNestedList = true;
+              nestedLists.add(itemChild);
+            } else {
+              contentNodes.add(itemChild);
+            }
+          }
+        }
+        
+        // Process item's content
+        if (contentNodes.isNotEmpty) {
+          spans.addAll(_processInlineElements(contentNodes, context, theme, style));
+        }
+        
+        // Process nested lists with proper spacing
+        if (hasNestedList) {
+          // Add space after item content before nested list
+          spans.add(const TextSpan(text: '\n'));
+          
+          // Process nested lists
+          for (final nestedList in nestedLists) {
+            spans.addAll(_buildListSpans(nestedList, context, theme, style, level + 1));
+          }
+        } else {
+          // Add line break after item
+          spans.add(const TextSpan(text: '\n'));
+        }
+        
+        index++;
+      }
+    }
+    
+    // For top-level lists, add a little space at the end
+    if (level == 0) {
+      spans.add(const TextSpan(text: '\n'));
+    }
+    
+    return spans;
+  }
+
+  // Get the appropriate bullet character for the list level
+  String _getBulletForLevel(int level) {
+    switch (level % 3) {
+      case 0: return '• '; // Filled circle for top level
+      case 1: return '◦ '; // Open circle for second level
+      case 2: return '▪ '; // Filled square for third level
+      default: return '• ';
+    }
+  }
+
+  // Add color variation for different list levels
+  Color _getBulletColor(ThemeData theme, int level) {
+    switch (level % 3) {
+      case 0:
+        return theme.colorScheme.primary;
+      case 1:
+        return widget.isDark
+            ? theme.colorScheme.primary.withOpacity(0.8)
+            : theme.colorScheme.primary.withOpacity(0.7);
+      case 2:
+        return widget.isDark
+            ? theme.colorScheme.secondary
+            : theme.colorScheme.secondary;
+      default:
+        return theme.colorScheme.primary;
+    }
+  }
+
+  // Get header style based on level
+  TextStyle _getHeaderStyle(int level, ThemeData theme, TextStyle baseStyle) {
+    late double fontSize;
+    late FontWeight fontWeight;
+    late Color color;
+    
+    // Define header sizes and styles based on level
+    switch (level) {
+      case 1:
+        fontSize = theme.textTheme.headlineLarge!.fontSize!;
+        fontWeight = FontWeight.w700;
+        color = widget.isDark ? Colors.white : theme.colorScheme.onSurface;
+        break;
+      case 2:
+        fontSize = theme.textTheme.headlineMedium!.fontSize!;
+        fontWeight = FontWeight.w600;
+        color = widget.isDark ? Colors.white : theme.colorScheme.onSurface;
+        break;
+      case 3:
+        fontSize = theme.textTheme.headlineSmall!.fontSize!;
+        fontWeight = FontWeight.w600;
+        color = widget.isDark ? Colors.white : theme.colorScheme.onSurface;
+        break;
+      case 4:
+        fontSize = theme.textTheme.titleLarge!.fontSize!;
+        fontWeight = FontWeight.w600;
+        color = widget.isDark ? Colors.white : theme.colorScheme.onSurface;
+        break;
+      case 5:
+        fontSize = theme.textTheme.titleMedium!.fontSize!;
+        fontWeight = FontWeight.w500;
+        color = widget.isDark ? Colors.white : theme.colorScheme.onSurface;
+        break;
+      case 6:
+        fontSize = theme.textTheme.titleMedium!.fontSize!;
+        fontWeight = FontWeight.w500;
+        color = widget.isDark ? Colors.white : theme.colorScheme.onSurface;
+        break;
+      default:
+        fontSize = theme.textTheme.titleMedium!.fontSize!;
+        fontWeight = FontWeight.w600;
+        color = widget.isDark ? Colors.white : theme.colorScheme.onSurface;
+    }
+    
+    return baseStyle.copyWith(
+      fontSize: fontSize,
+      fontWeight: fontWeight,
+      height: 1.2,  // Slightly tighter line height for headings
+      color: color,
+    );
+  }
+
+  // Build code block widget with improved syntax highlighting and selection handling
+  Widget _buildCodeBlockWidget(BuildContext context, String code, String? language) {
+    final theme = Theme.of(context);
+    final headerBgColor = widget.isDark ? const Color(0xFF21252B) : const Color(0xFFF0F0F0);
+    final contentBgColor = widget.isDark ? const Color(0xFF282C34) : const Color(0xFFFAFAFA);
+    
+    // Generate a unique key for this code block
+    final String codeKey = '${language ?? "code"}_${code.hashCode}';
+    
+    // Clean and normalize code: preserve ALL indentation but normalize line endings
+    String normalizedCode = code
+        .replaceAll(RegExp(r'\r\n|\r'), '\n') // Normalize line endings only
+        .trimRight(); // Only trim trailing whitespace, preserve ALL leading whitespace for indentation
+        
+    // Ensure no leading empty line
+    if (normalizedCode.startsWith('\n')) {
+      normalizedCode = normalizedCode.substring(1);
+    }
+        
+    // Determine appropriate tab size based on language
+    final int tabSpaces = _getTabSizeForLanguage(language);
+    
+    // Replace tabs with the appropriate number of spaces for the language
+    normalizedCode = normalizedCode.replaceAll('\t', ' ' * tabSpaces);
+        
+    // Make sure code doesn't start with a single 'n' character (which might happen due to newline issues)
+    if (normalizedCode.startsWith('n') && (normalizedCode.length == 1 || normalizedCode[1] == '\n')) {
+      normalizedCode = normalizedCode.substring(1);
+    }
+    
+    // Split the code into lines for processing
+    final List<String> lines = normalizedCode.split('\n');
+    
+    // Remove any leading blank lines which could cause issues
+    int startIndex = 0;
+    while (startIndex < lines.length && lines[startIndex].trim().isEmpty) {
+      startIndex++;
+    }
+    
+    // If entire block is empty, handle it
+    if (startIndex >= lines.length) {
+      return Container(
+        decoration: BoxDecoration(
+          color: contentBgColor,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: widget.isDark ? Colors.grey[700]! : Colors.grey[300]!, width: 1),
+        ),
+        padding: const EdgeInsets.all(16),
+        child: Text(
+          '(empty code block)',
+          style: GoogleFonts.firaCode(
+            fontSize: theme.textTheme.bodyMedium!.fontSize,
+            color: widget.isDark ? Colors.grey[400] : Colors.grey[600],
+            fontStyle: FontStyle.italic,
+          ),
+        ),
+      );
+    }
+    
+    // IMPORTANT: PRESERVE EXACT INDENTATION - don't calculate minimum indent
+    // Just remove leading empty lines and join back
+    if (startIndex > 0) {
+      normalizedCode = lines.sublist(startIndex).join('\n');
+    }
+    
+    // Fix any issues with remaining code fence or language identifiers
+    if (normalizedCode.startsWith('```')) {
+      final fenceLines = normalizedCode.split('\n');
+      if (fenceLines.length > 1) {
+        // Remove the first line if it's a code fence
+        normalizedCode = fenceLines.sublist(1).join('\n');
+      } else {
+        // If there's only one line, remove the code fence markers
+        normalizedCode = normalizedCode.replaceAll('```', '').trim();
+      }
+    }
+    
+    // Handle empty code blocks
+    if (normalizedCode.isEmpty) {
+      return Container(
+        decoration: BoxDecoration(
+          color: contentBgColor,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: widget.isDark ? Colors.grey[700]! : Colors.grey[300]!, width: 1),
+        ),
+        padding: const EdgeInsets.all(16),
+        child: Text(
+          '(empty code block)',
+          style: GoogleFonts.firaCode(
+            fontSize: theme.textTheme.bodyMedium!.fontSize,
+            color: widget.isDark ? Colors.grey[400] : Colors.grey[600],
+            fontStyle: FontStyle.italic,
+          ),
+        ),
+      );
+    }
+    
+    // Comprehensive language mapping
+    final languageMap = {
+      'py': 'python',
+      'python': 'python',
+      'js': 'javascript',
+      'ts': 'typescript',
+      'jsx': 'javascript',
+      'tsx': 'typescript',
+      'c++': 'cpp',
+      'cpp': 'cpp',
+      'sh': 'bash',
+      'shell': 'bash',
+      'json': 'json',
+      'html': 'html',
+      'css': 'css',
+      'java': 'java',
+      'kotlin': 'kotlin',
+      'swift': 'swift',
+      'ruby': 'ruby',
+      'go': 'go',
+      'rust': 'rust',
+      'dart': 'dart',
+      'sql': 'sql',
+      'xml': 'xml',
+      'yaml': 'yaml',
+      'yml': 'yaml',
+    };
+    
+    // Check if language is specified and not empty
+    final String normalizedLanguage = language?.trim().toLowerCase() ?? '';
+    
+    // If language is empty or not in our known languages, don't specify a language
+    String? highlightLanguage;
+    String displayLanguage = 'code';
+    
+    if (normalizedLanguage.isNotEmpty) {
+      // Check if the language is in our mapping
+      if (languageMap.containsKey(normalizedLanguage)) {
+        highlightLanguage = languageMap[normalizedLanguage];
+        displayLanguage = highlightLanguage!;
+      } else {
+        // If not in our mapping but not empty, use the provided language
+        highlightLanguage = normalizedLanguage;
+        displayLanguage = normalizedLanguage;
+      }
+    }
+    
+    // Choose appropriate theme based on dark/light mode
+    final codeTheme = widget.isDark ? atomOneDarkTheme : atomOneLightTheme;
+    
+    // Helper function for clipboard operations
+    void copyToClipboard(String text, String message) {
+      Clipboard.setData(ClipboardData(text: text));
+      _showGlobalToast(context, message);
+    }
+    
+    // Function to handle copy action
+    void handleCopy() {
+      final selection = _codeSelections[codeKey];
+      if (selection != null && !selection.isCollapsed) {
+        // Copy selected text
+        final selectedText = normalizedCode.substring(
+          selection.start,
+          selection.end,
+        );
+        copyToClipboard(selectedText, 'Selection copied to clipboard');
+      } else {
+        // Copy entire code
+        copyToClipboard(normalizedCode, 'Code copied to clipboard');
+      }
+    }
+    
+    // Create a focus node for keyboard shortcuts
+    final focusNode = FocusNode();
+    
+    return RepaintBoundary(
+      child: Material(
+        color: contentBgColor,
+        borderRadius: BorderRadius.circular(8),
+        clipBehavior: Clip.antiAlias,
+        elevation: 1,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Header with language display and copy button
+            Material(
+              color: headerBgColor,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      displayLanguage,
+                      style: theme.textTheme.bodySmall!.copyWith(
+                        color: widget.isDark
+                            ? const Color(0xFF9DA5B4)
+                            : const Color(0xFF383A42),
+                      ),
+                    ),
+                    MouseRegion(
+                      cursor: SystemMouseCursors.click,
+                      child: GestureDetector(
+                        onTap: () => copyToClipboard(normalizedCode, 'Code copied to clipboard'),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: widget.isDark 
+                                ? Colors.white.withOpacity(0.06) 
+                                : Colors.black.withOpacity(0.04),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.content_copy_rounded,
+                                size: 16,
+                                color: widget.isDark
+                                    ? const Color(0xFF9DA5B4)
+                                    : const Color(0xFF383A42),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            
+            // Code content with syntax highlighting and selection capability
+            Container(
+              constraints: const BoxConstraints(minHeight: 40),
+              padding: EdgeInsets.zero, // Use zero padding here since CodeContentWidget has its own padding
+              decoration: BoxDecoration(
+                color: contentBgColor,
+                border: Border(
+                  top: BorderSide(
+                    color: widget.isDark ? Colors.black.withOpacity(0.3) : Colors.grey.withOpacity(0.2),
+                    width: 1,
+                  ),
+                ),
+              ),
+              // Handle keyboard shortcuts
+              child: CallbackShortcuts(
+                bindings: {
+                  const SingleActivator(LogicalKeyboardKey.keyC, control: true): handleCopy,
+                  const SingleActivator(LogicalKeyboardKey.keyC, meta: true): handleCopy,
+                },
+                child: Focus(
+                  focusNode: focusNode,
+                  onFocusChange: (focused) {
+                    // This ensures the focus node is properly managed
+                    if (focused) {
+                      FocusScope.of(context).requestFocus(focusNode);
+                    }
+                  },
+                  // Use our fixed CodeContentWidget which preserves indentation correctly
+                  child: CodeContentWidget(
+                    code: normalizedCode,
+                    language: highlightLanguage,
+                    isDark: widget.isDark,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  // Helper method to extract plain text from markdown nodes
-  void _extractTextFromNode(md.Node node, StringBuffer buffer) {
-    if (node is md.Text) {
-      buffer.write(node.text);
-    } else if (node is md.Element) {
-      if (node.children != null) {
-        for (final child in node.children!) {
-          _extractTextFromNode(child, buffer);
+  // Build table widget
+  Widget _buildTableWidget(md.Element tableNode, BuildContext context, ThemeData theme, TextStyle style) {
+    final List<TableRow> tableRows = [];
+    bool hasHeader = false;
+    final List<TableColumnWidth> columnWidths = [];
+    final List<TextAlign> alignments = [];
+    int columnCount = 0;
+    
+    // First pass: determine column count and alignments
+    if (tableNode.children != null) {
+      // Look for header and separator row to determine alignments
+      md.Element? separatorRow;
+      
+      for (int i = 0; i < tableNode.children!.length; i++) {
+        final child = tableNode.children![i];
+        
+        if (child is md.Element && child.tag == 'thead') {
+          hasHeader = true;
+          
+          // Process header row to determine column count
+          if (child.children != null && child.children!.isNotEmpty) {
+            for (final headRow in child.children!) {
+              if (headRow is md.Element && headRow.tag == 'tr' && headRow.children != null) {
+                columnCount = headRow.children!.length;
+                break;
+              }
+            }
+          }
+          
+          // Look for alignment info in thead
+          if (child.children != null && child.children!.length > 1) {
+            final possibleSeparator = child.children![1];
+            if (possibleSeparator is md.Element && possibleSeparator.tag == 'tr') {
+              separatorRow = possibleSeparator;
+            }
+          }
+        } else if (child is md.Element && child.tag == 'tr' && child.children != null) {
+          // Handle direct tr elements
+          columnCount = math.max(columnCount, child.children!.length);
+        }
+      }
+      
+      // Initialize alignments based on separator row if available
+      for (int i = 0; i < columnCount; i++) {
+        TextAlign align = TextAlign.left; // Default alignment
+        
+        // Try to determine alignment from separator row
+        if (separatorRow != null && separatorRow.children != null && i < separatorRow.children!.length) {
+          final separatorCell = separatorRow.children![i];
+          if (separatorCell is md.Element && separatorCell.tag == 'td') {
+            final content = separatorCell.textContent.trim();
+            
+            if (content.startsWith(':') && content.endsWith(':')) {
+              align = TextAlign.center;
+            } else if (content.endsWith(':')) {
+              align = TextAlign.right;
+            } else {
+              align = TextAlign.left;
+            }
+          }
+        }
+        
+        alignments.add(align);
+        columnWidths.add(const FlexColumnWidth());
+      }
+    }
+    
+    // If no alignments determined, use defaults
+    if (alignments.isEmpty) {
+      for (int i = 0; i < math.max(columnCount, 1); i++) {
+        alignments.add(TextAlign.left);
+        columnWidths.add(const FlexColumnWidth());
+      }
+    }
+    
+    // Second pass: build rows
+    if (tableNode.children != null) {
+      for (int i = 0; i < tableNode.children!.length; i++) {
+        final child = tableNode.children![i];
+        
+        if (child is md.Element && child.tag == 'thead') {
+          // Process header row
+          hasHeader = true;
+          if (child.children != null && child.children!.isNotEmpty) {
+            // Only process the first row as header (skip separator row if it exists)
+            if (child.children!.isNotEmpty) {
+              final headRow = child.children!.first;
+              if (headRow is md.Element && headRow.tag == 'tr') {
+                tableRows.add(_buildTableRowWidget(headRow, context, theme, style, isHeader: true, alignments: alignments, columnCount: columnCount));
+              }
+            }
+          }
+        } else if (child is md.Element && child.tag == 'tbody') {
+          // Process body rows
+          if (child.children != null) {
+            for (final bodyRow in child.children!) {
+              if (bodyRow is md.Element && bodyRow.tag == 'tr') {
+                // Skip separator rows (used for alignment)
+                if (!_isSeparatorRow(bodyRow)) {
+                  tableRows.add(_buildTableRowWidget(bodyRow, context, theme, style, isHeader: false, alignments: alignments, columnCount: columnCount));
+                }
+              }
+            }
+          }
+        } else if (child is md.Element && child.tag == 'tr') {
+          // Handle direct tr elements but skip separator rows
+          if (!_isSeparatorRow(child)) {
+            final isHeaderRow = i == 0 && !hasHeader;
+            tableRows.add(_buildTableRowWidget(child, context, theme, style, isHeader: isHeaderRow, alignments: alignments, columnCount: columnCount));
+          }
         }
       }
     }
+    
+    // If no rows were built (unusual case), return a placeholder
+    if (tableRows.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: widget.isDark ? Colors.grey[800] : Colors.grey[200],
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: const Center(
+          child: Text("Empty table"),
+        ),
+      );
+    }
+    
+    // Build the table with proper styling
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        boxShadow: [
+          BoxShadow(
+            color: widget.isDark ? Colors.black.withOpacity(0.2) : Colors.black.withOpacity(0.1),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      margin: const EdgeInsets.symmetric(vertical: 12),
+      clipBehavior: Clip.antiAlias,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Table(
+          border: TableBorder(
+            horizontalInside: BorderSide(
+              color: widget.isDark ? Colors.grey[800]! : Colors.grey[300]!,
+              width: 1,
+            ),
+            verticalInside: BorderSide(
+              color: widget.isDark ? Colors.grey[800]! : Colors.grey[300]!,
+              width: 1,
+            ),
+            top: BorderSide(
+              color: widget.isDark ? Colors.grey[800]! : Colors.grey[300]!,
+              width: 1,
+            ),
+            bottom: BorderSide(
+              color: widget.isDark ? Colors.grey[800]! : Colors.grey[300]!,
+              width: 1,
+            ),
+            left: BorderSide(
+              color: widget.isDark ? Colors.grey[800]! : Colors.grey[300]!,
+              width: 1,
+            ),
+            right: BorderSide(
+              color: widget.isDark ? Colors.grey[800]! : Colors.grey[300]!,
+              width: 1,
+            ),
+          ),
+          defaultColumnWidth: const FlexColumnWidth(),
+          columnWidths: Map.fromEntries(
+            columnWidths.asMap().entries.map((e) => MapEntry(e.key, e.value))
+          ),
+          children: tableRows,
+        ),
+      ),
+    );
+  }
+
+  // Check if a row is a separator row (used for alignment)
+  bool _isSeparatorRow(md.Element row) {
+    if (row.children == null || row.children!.isEmpty) return false;
+    
+    // Check if this row only contains separator cells (like |:---:|:---:|)
+    bool isSeparator = true;
+    for (final cell in row.children!) {
+      if (cell is md.Element && (cell.tag == 'td' || cell.tag == 'th')) {
+        final content = cell.textContent.trim();
+        // If it doesn't match the separator pattern, it's not a separator row
+        if (!RegExp(r'^:?-+:?$').hasMatch(content)) {
+          isSeparator = false;
+          break;
+        }
+      } else {
+        isSeparator = false;
+        break;
+      }
+    }
+    
+    return isSeparator;
+  }
+
+  // Build a table row widget with proper cell alignment and styling
+  TableRow _buildTableRowWidget(md.Element rowNode, BuildContext context, ThemeData theme, TextStyle style, {
+    required bool isHeader,
+    required List<TextAlign> alignments,
+    required int columnCount,
+  }) {
+    final cells = <Widget>[];
+    
+    // Process the cells in this row
+    if (rowNode.children != null) {
+      for (int i = 0; i < columnCount; i++) {
+        // Get cell data if it exists
+        md.Element? cell;
+        if (i < rowNode.children!.length) {
+          final node = rowNode.children![i];
+          if (node is md.Element && (node.tag == 'td' || node.tag == 'th')) {
+            cell = node;
+          }
+        }
+        
+        // Determine text alignment for this cell
+        final alignment = i < alignments.length ? alignments[i] : TextAlign.left;
+        
+        cells.add(
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            color: isHeader 
+                ? (widget.isDark ? const Color(0xFF2C3240) : const Color(0xFFF5F7FA))
+                : (widget.isDark ? const Color(0xFF1E2634).withOpacity(0.4) : Colors.white),
+            child: cell == null
+                ? const SizedBox()
+                : SelectableText.rich(
+                    TextSpan(
+                      children: _processInlineElements(
+                        cell.children ?? [], 
+                        context, 
+                        theme,
+                        isHeader
+                            ? style.copyWith(
+                                fontWeight: FontWeight.bold,
+                                color: widget.isDark 
+                                    ? Colors.white 
+                                    : theme.colorScheme.onSurface,
+                              )
+                            : style,
+                      ),
+                    ),
+                    textAlign: alignment,
+                  ),
+          ),
+        );
+      }
+    }
+    
+    return TableRow(
+      decoration: const BoxDecoration(),
+      children: cells,
+    );
+  }
+
+  // Build image widget
+  Widget _buildImageWidget(String src, String alt, BuildContext context, ThemeData theme) {
+    if (src.startsWith('http')) {
+      // Network image
+      return Container(
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.7,
+          maxHeight: 300,
+        ),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8),
+          boxShadow: [
+            BoxShadow(
+              color: widget.isDark ? Colors.black.withOpacity(0.3) : Colors.black.withOpacity(0.1),
+              blurRadius: 6,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image.network(
+                src,
+                fit: BoxFit.contain,
+                loadingBuilder: (context, child, loadingProgress) {
+                  if (loadingProgress == null) return child;
+                  return Container(
+                    width: 200,
+                    height: 150,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: widget.isDark ? Colors.grey[850] : Colors.grey[200],
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Center(
+                      child: CircularProgressIndicator(
+                        value: loadingProgress.expectedTotalBytes != null
+                            ? loadingProgress.cumulativeBytesLoaded / 
+                                (loadingProgress.expectedTotalBytes ?? 1)
+                            : null,
+                      ),
+                    ),
+                  );
+                },
+                errorBuilder: (context, error, stackTrace) {
+                  return Container(
+                    width: 200,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: widget.isDark ? Colors.grey[850] : Colors.grey[200],
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.broken_image, color: widget.isDark ? Colors.grey[400] : Colors.grey[700]),
+                        const SizedBox(height: 8),
+                        Text('Failed to load image', style: TextStyle(
+                          fontSize: 12,
+                          color: widget.isDark ? Colors.grey[400] : Colors.grey[700],
+                        )),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+            if (alt.isNotEmpty && alt != 'Image')
+              Padding(
+                padding: const EdgeInsets.only(top: 8.0),
+                child: Text(
+                  alt,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontStyle: FontStyle.italic,
+                    color: widget.isDark ? Colors.grey[400] : Colors.grey[700],
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+          ],
+        ),
+      );
+    } else {
+      // Local image or invalid image
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: widget.isDark ? Colors.grey[850] : Colors.grey[200],
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: widget.isDark ? Colors.grey[800]! : Colors.grey[300]!,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.image_not_supported, color: widget.isDark ? Colors.grey[400] : Colors.grey[700]),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                alt.isNotEmpty ? alt : 'Image',
+                style: TextStyle(
+                  color: widget.isDark ? Colors.grey[400] : Colors.grey[700],
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
+  // Helper method to determine tab size based on language
+  int _getTabSizeForLanguage(String? language) {
+    if (language == null) return 2;  // Default to 2 spaces for unknown languages
+    
+    final String lang = language.toLowerCase();
+    
+    // Languages that commonly use 4 spaces
+    if (lang == 'python' || lang == 'py' || 
+        lang == 'rust' || lang == 'rs' ||
+        lang == 'swift' ||
+        lang == 'kotlin' ||
+        lang == 'scala') {
+      return 4;
+    }
+    
+    // Languages that commonly use 2 spaces
+    if (lang == 'javascript' || lang == 'js' ||
+        lang == 'typescript' || lang == 'ts' ||
+        lang == 'json' ||
+        lang == 'yaml' || lang == 'yml' ||
+        lang == 'ruby' || lang == 'rb' ||
+        lang == 'css' ||
+        lang == 'html' ||
+        lang == 'jsx' ||
+        lang == 'tsx' ||
+        lang == 'dart') {
+      return 2;
+    }
+    
+    // Default to 2 spaces for all other languages
+    return 2;
   }
 }
 
@@ -1442,13 +2214,13 @@ class SelectableMarkdown extends StatelessWidget {
 ///
 class CodeContentWidget extends StatefulWidget {
   final String code;
-  final String language;
+  final String? language;
   final bool isDark;
 
   const CodeContentWidget({
     super.key,
     required this.code,
-    required this.language,
+    this.language,
     required this.isDark,
   });
 
@@ -1459,7 +2231,6 @@ class CodeContentWidget extends StatefulWidget {
 class _CodeContentWidgetState extends State<CodeContentWidget> {
   final FocusNode _focusNode = FocusNode();
   TextSelection? _lastSelection;
-  // Add a custom selection controller that doesn't show cursor
   final MaterialTextSelectionControls _cursorlessControls = CursorlessSelectionControls();
   
   @override
@@ -1468,172 +2239,116 @@ class _CodeContentWidgetState extends State<CodeContentWidget> {
     super.dispose();
   }
   
-  // Helper method to copy text to clipboard
   void _copyToClipboard(String text, String message) {
     Clipboard.setData(ClipboardData(text: text));
     _showCopyToast(context, message);
   }
 
+  void _handleCopy() {
+    if (_lastSelection != null && !_lastSelection!.isCollapsed) {
+      // Copy selected text
+      final selectedText = widget.code.substring(
+        _lastSelection!.start,
+        _lastSelection!.end,
+      );
+      _copyToClipboard(selectedText, 'Selection copied to clipboard');
+    } else {
+      // Copy entire code
+      _copyToClipboard(widget.code, 'Code copied to clipboard');
+    }
+  }
+  
+  // Get appropriate tab size based on language
+  int _getLanguageTabSize() {
+    final String? language = widget.language?.toLowerCase();
+    return _getTabSizeForLanguage(language);
+  }
+
+  // Helper method to determine tab size based on language
+  int _getTabSizeForLanguage(String? language) {
+    if (language == null) return 2;  // Default to 2 spaces for unknown languages
+    
+    final String lang = language.toLowerCase();
+    
+    // Languages that commonly use 4 spaces
+    if (lang == 'python' || lang == 'py' || 
+        lang == 'rust' || lang == 'rs' ||
+        lang == 'swift' ||
+        lang == 'kotlin' ||
+        lang == 'scala') {
+      return 4;
+    }
+    
+    // Languages that commonly use 2 spaces
+    if (lang == 'javascript' || lang == 'js' ||
+        lang == 'typescript' || lang == 'ts' ||
+        lang == 'json' ||
+        lang == 'yaml' || lang == 'yml' ||
+        lang == 'ruby' || lang == 'rb' ||
+        lang == 'css' ||
+        lang == 'html' ||
+        lang == 'jsx' ||
+        lang == 'tsx' ||
+        lang == 'dart') {
+      return 2;
+    }
+    
+    // Default to 2 spaces for all other languages
+    return 2;
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final headerBgColor = widget.isDark ? const Color(0xFF21252B) : const Color(0xFFF0F0F0);
-    final contentBgColor = widget.isDark ? const Color(0xFF282C34) : const Color(0xFFFAFAFA);
-    final codeTheme = widget.isDark ? atomOneDarkTheme : atomOneLightTheme;
     
-    // Normalize code to ensure consistent selection behavior
-    final normalizedCode = widget.code
-        .replaceAll(RegExp(r'\r\n|\r'), '\n')
-        .replaceAll(RegExp(r'\n\s*\n'), '\n\n')
-        .replaceAll(RegExp(r' +$', multiLine: true), '');
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // Single header for code blocks
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          decoration: BoxDecoration(
-            color: headerBgColor,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                widget.language.isEmpty ? 'plain text' : widget.language,
-                style: theme.textTheme.bodySmall!.copyWith(
-                  color: widget.isDark
-                      ? const Color(0xFF9DA5B4)
-                      : const Color(0xFF383A42),
-                ),
-              ),
-              MouseRegion(
-                cursor: SystemMouseCursors.click,
-                child: GestureDetector(
-                  onTap: () {
-                    _copyToClipboard(normalizedCode, 'Code copied to clipboard');
-                  },
-                  child: Icon(
-                    Icons.content_copy_rounded,
-                    size: 18,
-                    color: widget.isDark
-                        ? const Color(0xFF9DA5B4)
-                        : const Color(0xFF383A42),
-                  ),
-                ),
-              ),
-            ],
-          ),
+    // Normalize code and remove empty line at top ONLY
+    String normalizedCode = widget.code
+        .replaceAll(RegExp(r'\r\n|\r'), '\n'); // Normalize line endings only
+    
+    // Remove ONLY the empty line at the top if present, preserve all other formatting
+    if (normalizedCode.startsWith('\n')) {
+      normalizedCode = normalizedCode.substring(1);
+    }
+    
+    // Trim only trailing whitespace
+    normalizedCode = normalizedCode.trimRight();
+    
+    // Convert tabs to spaces for consistent display
+    final int tabSpaces = _getLanguageTabSize();
+    normalizedCode = normalizedCode.replaceAll('\t', ' ' * tabSpaces);
+    
+    final codeTheme = widget.isDark ? atomOneDarkTheme : atomOneLightTheme;
+    final contentBgColor = widget.isDark ? const Color(0xFF282C34) : const Color(0xFFFAFAFA);
+    
+    return Container(
+      decoration: BoxDecoration(
+        color: contentBgColor,
+        borderRadius: const BorderRadius.only(
+          bottomLeft: Radius.circular(8),
+          bottomRight: Radius.circular(8),
         ),
-        // Simple container with SelectableText for code
-        Container(
-          width: double.infinity,
-          decoration: BoxDecoration(
-            color: contentBgColor,
-            borderRadius: const BorderRadius.only(
-              bottomLeft: Radius.circular(8),
-              bottomRight: Radius.circular(8),
-            ),
-          ),
-          padding: const EdgeInsets.all(16.0),
-          child: CallbackShortcuts(
-            bindings: {
-              const SingleActivator(LogicalKeyboardKey.keyC, control: true): () {
-                if (_lastSelection != null && !_lastSelection!.isCollapsed) {
-                  // Copy selected text
-                  final selectedText = normalizedCode.substring(
-                    _lastSelection!.start,
-                    _lastSelection!.end,
-                  );
-                  _copyToClipboard(selectedText, 'Selection copied to clipboard');
-                } else {
-                  // Copy entire code
-                  _copyToClipboard(normalizedCode, 'Code copied to clipboard');
-                }
-              },
-              const SingleActivator(LogicalKeyboardKey.keyC, meta: true): () {
-                if (_lastSelection != null && !_lastSelection!.isCollapsed) {
-                  // Copy selected text
-                  final selectedText = normalizedCode.substring(
-                    _lastSelection!.start,
-                    _lastSelection!.end,
-                  );
-                  _copyToClipboard(selectedText, 'Selection copied to clipboard');
-                } else {
-                  // Copy entire code
-                  _copyToClipboard(normalizedCode, 'Code copied to clipboard');
-                }
-              },
+      ),
+      padding: const EdgeInsets.all(16.0),
+      child: CallbackShortcuts(
+        bindings: {
+          const SingleActivator(LogicalKeyboardKey.keyC, control: true): () => _handleCopy(),
+          const SingleActivator(LogicalKeyboardKey.keyC, meta: true): () => _handleCopy(),
+        },
+        child: Focus(
+          focusNode: _focusNode,
+          child: SelectableCodeView(
+            code: normalizedCode,
+            language: widget.language ?? 'text',
+            theme: codeTheme,
+            isDark: widget.isDark,
+            onSelectionChanged: (selection) {
+              setState(() {
+                _lastSelection = selection;
+              });
             },
-            child: Focus(
-              focusNode: _focusNode,
-              child: SizedBox(
-                width: double.infinity,
-                child: Stack(
-                  children: [
-                    // Visible highlighted code
-                    HighlightView(
-                      normalizedCode,
-                      language: widget.language,
-                      theme: codeTheme,
-                      textStyle: GoogleFonts.firaCode(
-                        fontSize: 14,
-                        height: 1.5,
-                      ),
-                    ),
-                    // Invisible selectable text
-                    Theme(
-                      // Use a theme to customize selection appearance
-                      data: theme.copyWith(
-                        textSelectionTheme: TextSelectionThemeData(
-                          selectionColor: widget.isDark
-                            ? Colors.white.withOpacity(0.3)
-                            : theme.colorScheme.primary.withOpacity(0.2),
-                          selectionHandleColor: widget.isDark
-                            ? Colors.white.withOpacity(0.7)
-                            : theme.colorScheme.primary,
-                          cursorColor: Colors.transparent,
-                        ),
-                      ),
-                      child: SelectableText(
-                        normalizedCode,
-                        style: GoogleFonts.firaCode(
-                          fontSize: 14,
-                          height: 1.5,
-                          color: Colors.transparent,
-                        ),
-                        // Explicitly disable cursor visibility
-                        showCursor: false,
-                        // Use our custom selection controls without cursor
-                        selectionControls: _cursorlessControls,
-                        // Don't move cursor when tapped
-                        onTap: () {},
-                        onSelectionChanged: (selection, _) {
-                          setState(() {
-                            _lastSelection = selection;
-                          });
-                        },
-                        contextMenuBuilder: (context, editableTextState) {
-                          return AdaptiveTextSelectionToolbar.buttonItems(
-                            anchors: editableTextState.contextMenuAnchors,
-                            buttonItems: editableTextState.contextMenuButtonItems
-                                .where((item) => 
-                                    item.type == ContextMenuButtonType.copy || 
-                                    item.type == ContextMenuButtonType.selectAll)
-                                .toList(),
-                          );
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
           ),
         ),
-      ],
+      ),
     );
   }
   
@@ -1642,6 +2357,7 @@ class _CodeContentWidgetState extends State<CodeContentWidget> {
     final overlay = Overlay.of(context);
     final renderBox = context.findRenderObject() as RenderBox;
     final position = renderBox.localToGlobal(Offset.zero);
+    final theme = Theme.of(context); // Get theme from context
     
     final entry = OverlayEntry(
       builder: (context) => Positioned(
@@ -1649,12 +2365,12 @@ class _CodeContentWidgetState extends State<CodeContentWidget> {
         left: position.dx + renderBox.size.width / 2 - 75, // Center horizontally
         child: Material(
           elevation: 4,
-          borderRadius: BorderRadius.circular(4),
+          borderRadius: BorderRadius.circular(8),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
               color: widget.isDark ? Colors.grey[800] : Colors.white,
-              borderRadius: BorderRadius.circular(4),
+              borderRadius: BorderRadius.circular(8),
               boxShadow: [
                 BoxShadow(
                   color: Colors.black.withOpacity(0.1),
@@ -1663,12 +2379,23 @@ class _CodeContentWidgetState extends State<CodeContentWidget> {
                 ),
               ],
             ),
-            child: Text(
-              message,
-              style: TextStyle(
-                color: widget.isDark ? Colors.white : Colors.black87,
-                fontSize: 12,
-              ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.check_circle_outline,
+                  color: theme.colorScheme.primary,
+                  size: 14,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  message,
+                  style: TextStyle(
+                    color: widget.isDark ? Colors.white : Colors.black87,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -1682,11 +2409,189 @@ class _CodeContentWidgetState extends State<CodeContentWidget> {
   }
 }
 
+/// A custom widget that combines syntax highlighting with text selection
+class SelectableCodeView extends StatefulWidget {
+  final String code;
+  final String language;
+  final Map<String, TextStyle> theme;
+  final bool isDark;
+  final Function(TextSelection)? onSelectionChanged;
+
+  const SelectableCodeView({
+    super.key,
+    required this.code,
+    required this.language,
+    required this.theme,
+    required this.isDark,
+    this.onSelectionChanged,
+  });
+
+  @override
+  State<SelectableCodeView> createState() => _SelectableCodeViewState();
+}
+
+class _SelectableCodeViewState extends State<SelectableCodeView> {
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    
+    // Ensure code has no empty line at the top and preserve exact indentation
+    final String processedCode = _preprocessCode(widget.code);
+    
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return Stack(
+          children: [
+            // The visible highlighted code with exact indentation
+            Container(
+              width: constraints.maxWidth,
+              child: SingleChildScrollView(
+                physics: const NeverScrollableScrollPhysics(),
+                scrollDirection: Axis.horizontal,
+                child: IntrinsicWidth(
+                  child: HighlightView(
+                    processedCode,
+                    language: widget.language,
+                    theme: widget.theme,
+                    textStyle: GoogleFonts.firaCode(
+                      fontSize: 14,
+                      height: 1.5,
+                      letterSpacing: -0.2,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                    padding: EdgeInsets.zero,
+                  ),
+                ),
+              ),
+            ),
+            
+            // The invisible but selectable text that precisely matches the highlighted code
+            Container(
+              width: constraints.maxWidth,
+              child: SingleChildScrollView(
+                physics: const NeverScrollableScrollPhysics(),
+                scrollDirection: Axis.horizontal,
+                child: IntrinsicWidth(
+                  child: Theme(
+                    data: theme.copyWith(
+                      textSelectionTheme: TextSelectionThemeData(
+                        selectionColor: widget.isDark
+                          ? Colors.white.withOpacity(0.3)
+                          : theme.colorScheme.primary.withOpacity(0.2),
+                        selectionHandleColor: widget.isDark
+                          ? Colors.white.withOpacity(0.7)
+                          : theme.colorScheme.primary,
+                      ),
+                    ),
+                    child: PreText(
+                      processedCode,
+                      style: GoogleFonts.firaCode(
+                        fontSize: 14,
+                        height: 1.5,
+                        letterSpacing: -0.2,
+                        color: Colors.transparent,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                      selectionControls: CursorlessSelectionControls(),
+                      onSelectionChanged: widget.onSelectionChanged,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+  
+  // Preprocess code to ensure proper display
+  String _preprocessCode(String code) {
+    // 1. Normalize line endings
+    String result = code.replaceAll(RegExp(r'\r\n|\r'), '\n');
+    
+    // 2. Remove empty line at the top if present
+    if (result.startsWith('\n')) {
+      result = result.substring(1);
+    }
+    
+    // 3. Trim only trailing whitespace, not leading
+    result = result.trimRight();
+    
+    return result;
+  }
+}
+
+/// A pre-formatted text widget that preserves whitespace and handles selection
+class PreText extends StatelessWidget {
+  final String text;
+  final TextStyle style;
+  final TextSelectionControls? selectionControls;
+  final Function(TextSelection)? onSelectionChanged;
+
+  const PreText(
+    this.text, {
+    super.key,
+    required this.style,
+    this.selectionControls,
+    this.onSelectionChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // Make sure to use a style with proper monospace features
+    final textStyle = style.copyWith(
+      // FiraCode from GoogleFonts is already monospace, just need tabular figures
+      fontFeatures: const [FontFeature.tabularFigures()],
+    );
+    
+    // Use RawScrollbar to give proper horizontal scrolling behavior if needed
+    return SelectableText.rich(
+      TextSpan(
+        text: text,
+        style: textStyle,
+      ),
+      showCursor: false,
+      strutStyle: StrutStyle(
+        fontSize: style.fontSize,
+        height: style.height,
+        forceStrutHeight: true,
+        leadingDistribution: TextLeadingDistribution.even,
+      ),
+      // These layout settings ensure proper handling of whitespace
+      textWidthBasis: TextWidthBasis.longestLine,
+      textAlign: TextAlign.left,
+      textDirection: TextDirection.ltr,
+      // Don't constrain vertical size
+      maxLines: null,
+      minLines: null,
+      // Ensure proper scrolling behavior
+      scrollPhysics: const NeverScrollableScrollPhysics(),
+      selectionControls: selectionControls,
+      onSelectionChanged: (selection, _) {
+        if (onSelectionChanged != null) {
+          onSelectionChanged!(selection);
+        }
+      },
+      contextMenuBuilder: (context, editableTextState) {
+        return AdaptiveTextSelectionToolbar.buttonItems(
+          anchors: editableTextState.contextMenuAnchors,
+          buttonItems: editableTextState.contextMenuButtonItems
+              .where((item) => 
+                  item.type == ContextMenuButtonType.copy || 
+                  item.type == ContextMenuButtonType.selectAll)
+              .toList(),
+        );
+      },
+    );
+  }
+}
+
 class NoisePainter extends CustomPainter {
   final Color color;
   final double opacity;
   final double density;
-  final Random random = Random(42); // Fixed seed for consistent pattern
+  final math.Random random = math.Random(42); // Fixed seed for consistent pattern
 
   NoisePainter({
     required this.color,
@@ -1723,26 +2628,85 @@ void _handleMarkdownLinkTap(BuildContext context, String? href) async {
   final Uri uri = Uri.parse(href);
   
   try {
+    // Show a temporary small indicator that the link is being processed
+    final OverlayEntry loadingEntry = OverlayEntry(
+      builder: (context) => Positioned(
+        bottom: 20,
+        right: 20,
+        child: Material(
+          elevation: 4,
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surface,
+              borderRadius: BorderRadius.circular(8),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.1),
+                  blurRadius: 6,
+                  offset: const Offset(0, 2),
+                )
+              ],
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  'Opening link...',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurface,
+                    fontSize: 14,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    
+    // Show the loading indicator
+    if (context.mounted) {
+      Overlay.of(context).insert(loadingEntry);
+    }
+    
+    // Check if we can launch the URL
     final canLaunch = await url_launcher.canLaunchUrl(uri);
+    
+    // Remove the loading indicator
+    loadingEntry.remove();
+    
     if (canLaunch) {
       await url_launcher.launchUrl(uri, mode: url_launcher.LaunchMode.externalApplication);
     } else {
       // Show a toast notification if the URL can't be launched
       if (context.mounted) {
-        _showGlobalToast(context, 'Could not open $href');
+        _showGlobalToast(context, 'Could not open $href', isError: true);
       }
     }
   } catch (e) {
     // Show error in toast notification
     if (context.mounted) {
-      _showGlobalToast(context, 'Error opening link: $e');
+      _showGlobalToast(context, 'Error opening link: $e', isError: true);
     }
   }
 }
 
 // Helper function to show a global toast notification
-void _showGlobalToast(BuildContext context, String message) {
+void _showGlobalToast(BuildContext context, String message, {bool isError = false}) {
   final overlay = Overlay.of(context);
+  final theme = Theme.of(context);
+  final isDark = theme.brightness == Brightness.dark;
   
   // Position it at the top center of the screen
   final entry = OverlayEntry(
@@ -1755,9 +2719,7 @@ void _showGlobalToast(BuildContext context, String message) {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           decoration: BoxDecoration(
-            color: Theme.of(context).brightness == Brightness.dark 
-              ? Colors.grey[800] 
-              : Colors.white,
+            color: isDark ? Colors.grey[850] : Colors.white,
             borderRadius: BorderRadius.circular(8),
             boxShadow: [
               BoxShadow(
@@ -1771,8 +2733,8 @@ void _showGlobalToast(BuildContext context, String message) {
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(
-                Icons.info_outline,
-                color: Theme.of(context).colorScheme.error,
+                isError ? Icons.error_outline : Icons.info_outline,
+                color: isError ? theme.colorScheme.error : theme.colorScheme.primary,
                 size: 18,
               ),
               const SizedBox(width: 8),
@@ -1780,9 +2742,7 @@ void _showGlobalToast(BuildContext context, String message) {
                 child: Text(
                   message,
                   style: TextStyle(
-                    color: Theme.of(context).brightness == Brightness.dark
-                      ? Colors.white
-                      : Colors.black87,
+                    color: isDark ? Colors.white : Colors.black87,
                   ),
                   overflow: TextOverflow.ellipsis,
                   maxLines: 2,
@@ -2061,7 +3021,6 @@ class _StreamingCursorInlineState extends State<StreamingCursorInline> with Sing
   @override
   Widget build(BuildContext context) {
     final themeProvider = context.read<ThemeProvider>();
-    final gradient = themeProvider.primaryGradient;
     final primaryColor = widget.theme.colorScheme.primary;
     
     return AnimatedBuilder(
@@ -2069,24 +3028,55 @@ class _StreamingCursorInlineState extends State<StreamingCursorInline> with Sing
       builder: (context, child) {
         return Padding(
           padding: const EdgeInsets.only(left: 2.0),
-          child: Transform.scale(
-            scale: _pulseAnimation.value,
-            child: Container(
-              height: 8, // Larger dot
-              width: 8, // Larger dot
-              margin: const EdgeInsets.only(bottom: 2.0, top: 2.0), // Better vertical alignment
-              decoration: BoxDecoration(
-                gradient: gradient,
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                    color: primaryColor.withOpacity(0.4),
-                    blurRadius: 4,
-                    spreadRadius: _opacityAnimation.value,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              // Shadow/glow effect
+              Transform.scale(
+                scale: _pulseAnimation.value * 1.2,
+                child: Container(
+                  height: 10,
+                  width: 10,
+                  decoration: BoxDecoration(
+                    color: Colors.transparent,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: primaryColor.withOpacity(_opacityAnimation.value * 0.3),
+                        blurRadius: 6,
+                        spreadRadius: 1,
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
-            ),
+              // Main cursor dot
+              Transform.scale(
+                scale: _pulseAnimation.value,
+                child: Container(
+                  height: 8,
+                  width: 8,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        primaryColor,
+                        primaryColor.withOpacity(0.8),
+                      ],
+                    ),
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: primaryColor.withOpacity(0.4),
+                        blurRadius: 4,
+                        spreadRadius: _opacityAnimation.value,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
         );
       },
@@ -2101,4 +3091,47 @@ class AlwaysDisabledFocusNode extends FocusNode {
   
   @override
   bool canRequestFocus = false;
+}
+
+// Create a custom HighlightView wrapper that preserves whitespace exactly
+class PreservedWhitespaceHighlightView extends StatelessWidget {
+  final String code;
+  final String language;
+  final Map<String, TextStyle> theme;
+  final TextStyle textStyle;
+  final EdgeInsets padding;
+
+  const PreservedWhitespaceHighlightView({
+    super.key,
+    required this.code,
+    required this.language,
+    required this.theme,
+    required this.textStyle, // This should be GoogleFonts.firaCode which is already monospace
+    this.padding = EdgeInsets.zero,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // We use firaCode which is a monospace font perfect for code. The fontFeatures.tabularFigures() 
+    // ensures all characters take up exactly the same width, preserving code indentation.
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          physics: const NeverScrollableScrollPhysics(),
+          child: IntrinsicWidth(
+            child: HighlightView(
+              code,
+              language: language,
+              theme: theme,
+              textStyle: textStyle.copyWith(
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+              padding: padding,
+            ),
+          ),
+        );
+      },
+    );
+  }
 }

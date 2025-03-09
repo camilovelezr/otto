@@ -118,7 +118,7 @@ async def save_streamed_message(
                         )
 
                 # If the last chunk contains usage info, use it
-                if "usage" in data:
+                if "usage" in data and data["usage"] is not None:
                     token_count = data["usage"].get("completion_tokens", 0)
                     logger.debug(f"Token count from usage: {token_count}")
             except json.JSONDecodeError as e:
