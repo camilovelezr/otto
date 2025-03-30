@@ -152,29 +152,82 @@ class ModelService {
   }
   
   Future<List<LLMModel>> syncModels({String? userId, String? username}) async {
-    debugPrint('Syncing models is redirected to use only /models/list endpoint');
+    final endpoint = '/models/sync';
+    final url = '$_baseUrl$endpoint';
+    debugPrint('Attempting to sync models via POST to: $url');
     
-    // As per backend requirements, only use the /models/list endpoint with no auth or user info
+    // Use provided userId or defaultObjectId if null/empty
+    final effectiveUserId = (userId == null || userId.isEmpty) ? defaultObjectId : userId;
+    
     try {
-      debugPrint('Using only the /models/list endpoint as directed (plain call with no user info)');
+      final response = await _client.post(
+        Uri.parse(url),
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          // Include user info if available, backend might ignore it
+          if (username != null && username.isNotEmpty) 'X-Username': username,
+          'X-User-ID': effectiveUserId, // Send effective user ID
+        },
+        // Assuming sync might not need a body, but can add if required
+        // body: json.encode({'userId': effectiveUserId}), 
+      ).timeout(const Duration(seconds: 30)); // Increased timeout for sync
       
-      // Ignore any provided user identification parameters - don't send them
-      if (userId != null && !userId.isEmpty) {
-        debugPrint('Note: userId $userId was provided but will not be used');
-      }
-      if (username != null && !username.isEmpty) {
-        debugPrint('Note: username $username was provided but will not be used');
-      }
+      debugPrint('Sync models response status: ${response.statusCode}');
       
-      // Simply call getModels which makes a plain call without user identification
-      return await getModels();
+      if (response.statusCode == 200) {
+        try {
+          final data = json.decode(response.body);
+          debugPrint('Sync response body: ${response.body.substring(0, response.body.length > 100 ? 100 : response.body.length)}...');
+          
+          if (data is List) {
+            final modelsList = data.map((json) => LLMModel.fromJson(json)).toList();
+            debugPrint('Parsed ${modelsList.length} models successfully after sync');
+            return modelsList;
+          } else if (data is Map<String, dynamic> && data.containsKey('models')) {
+             // Handle if response is like {"models": [...]}
+             final modelsData = data['models'];
+             if (modelsData is List) {
+               final modelsList = modelsData.map((json) => LLMModel.fromJson(json)).toList();
+               debugPrint('Parsed ${modelsList.length} models successfully after sync (from nested list)');
+               return modelsList;
+             }
+          }
+           else {
+            debugPrint('Unexpected sync response format: ${response.body}');
+            // Fallback: Try fetching the list normally after sync attempt
+            debugPrint('Sync response unexpected, falling back to GET /models/list');
+            return await getModels();
+          }
+        } catch (parseError) {
+          debugPrint('Error parsing sync models response: $parseError');
+          debugPrint('Response body: ${response.body}');
+           // Fallback: Try fetching the list normally after sync attempt
+          debugPrint('Sync parse error, falling back to GET /models/list');
+          return await getModels();
+        }
+      } else {
+        debugPrint('Failed to sync models: ${response.statusCode} - ${response.body}');
+        // Fallback: Try fetching the list normally if sync fails
+        debugPrint('Sync failed, falling back to GET /models/list');
+        return await getModels();
+      }
     } catch (e) {
-      debugPrint('Error fetching models: $e');
-      return [];
+      debugPrint('Error syncing models: $e');
+       // Fallback: Try fetching the list normally on error
+      debugPrint('Sync error, falling back to GET /models/list');
+      return await getModels(); // Return result of getModels on error
     }
+    // Add redundant return to satisfy compiler, although logically unreachable
+    // This covers the theoretical case where the try block completes without returning.
+    // debugPrint('Sync models function reached unexpected end, falling back to getModels');
+    // return await getModels(); 
+    // Let's ensure a return in all cases, even if theoretically unreachable by adding it here.
+     debugPrint('Sync models function reached unexpected end, falling back to getModels');
+     return await getModels();
   }
   
   void dispose() {
     _client.close();
   }
-} 
+}

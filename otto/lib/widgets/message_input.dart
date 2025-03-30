@@ -97,7 +97,7 @@ class _MessageInputState extends State<MessageInput> {
     return Container(
       padding: EdgeInsets.symmetric(horizontal: AppSpacing.blockSpacing),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Expanded(
             child: TextSelectionTheme(
@@ -106,20 +106,15 @@ class _MessageInputState extends State<MessageInput> {
                 cursorColor: theme.colorScheme.primary,
                 selectionHandleColor: theme.colorScheme.primary,
               ),
-              child: RawKeyboardListener(
-                focusNode: FocusNode(),
-                onKey: (event) {
-                  if (event is RawKeyDownEvent) {
-                    final bool isEnterPressed = event.logicalKey == LogicalKeyboardKey.enter;
-                    final bool isShiftPressed = event.isShiftPressed;
-
-                    if (isEnterPressed && !isShiftPressed) {
-                      // Prevent default newline insertion
-                      _handleSubmit();
-                      // Returning here to prevent default action (which would be inserting a newline)
-                      return;
-                    }
+              child: Focus(
+                onKeyEvent: (node, event) {
+                  if (event is KeyDownEvent && 
+                      event.logicalKey == LogicalKeyboardKey.enter && 
+                      !(HardwareKeyboard.instance.isShiftPressed)) {
+                    _handleSubmit();
+                    return KeyEventResult.handled;
                   }
+                  return KeyEventResult.ignored;
                 },
                 child: TextField(
                   controller: _controller,
@@ -148,7 +143,8 @@ class _MessageInputState extends State<MessageInput> {
                   cursorHeight: 20,
                   cursorColor: theme.colorScheme.primary.withOpacity(0.8),
                   style: theme.textTheme.bodyLarge?.copyWith(
-                    height: 1.5,
+                    height: 1.3,
+                    fontSize: 16,
                   ),
                   // Simplified input formatters to avoid potential issues
                   inputFormatters: [
@@ -168,11 +164,13 @@ class _MessageInputState extends State<MessageInput> {
                     focusedBorder: InputBorder.none,
                     contentPadding: EdgeInsets.symmetric(
                       horizontal: AppSpacing.inlineSpacing * 2,
-                      vertical: AppSpacing.paragraphSpacing,
+                      vertical: 14.0,
                     ),
                     isDense: true,
                     focusColor: Colors.transparent,
                     hoverColor: Colors.transparent,
+                    // Add alignment to improve text positioning
+                    alignLabelWithHint: true,
                   ),
                   showCursor: true,
                   mouseCursor: SystemMouseCursors.text,
@@ -181,7 +179,7 @@ class _MessageInputState extends State<MessageInput> {
               ),
             ),
           ),
-          SizedBox(width: AppSpacing.inlineSpacing),
+          SizedBox(width: AppSpacing.inlineSpacing * 0.8),
           GestureDetector(
             onTap: widget.isLoading ? null : _handleSubmit,
             child: AnimatedContainer(
@@ -199,11 +197,11 @@ class _MessageInputState extends State<MessageInput> {
                     )!,
                   ],
                 ),
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(14),
                 boxShadow: [
                   BoxShadow(
-                    color: theme.colorScheme.primary.withOpacity(0.15),
-                    blurRadius: 8,
+                    color: theme.colorScheme.primary.withOpacity(0.12),
+                    blurRadius: 6,
                     offset: const Offset(0, 2),
                     spreadRadius: 0,
                   ),
@@ -213,15 +211,15 @@ class _MessageInputState extends State<MessageInput> {
                 color: Colors.transparent,
                 child: InkWell(
                   onTap: widget.isLoading ? null : _handleSubmit,
-                  borderRadius: BorderRadius.circular(16),
+                  borderRadius: BorderRadius.circular(14),
                   child: Container(
-                    padding: EdgeInsets.all(AppSpacing.inlineSpacing + 2),
+                    padding: const EdgeInsets.all(10),
                     child: AnimatedSwitcher(
                       duration: const Duration(milliseconds: 200),
                       child: widget.isLoading
                           ? SizedBox(
-                              width: 20,
-                              height: 20,
+                              width: 18,
+                              height: 18,
                               child: CircularProgressIndicator(
                                 strokeWidth: 2,
                                 valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
@@ -230,7 +228,7 @@ class _MessageInputState extends State<MessageInput> {
                           : const Icon(
                               Icons.send_rounded,
                               color: Colors.white,
-                              size: 20,
+                              size: 18,
                             ),
                     ),
                   ),

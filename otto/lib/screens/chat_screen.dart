@@ -7,7 +7,7 @@ import 'dart:math';
 import '../services/chat_provider.dart';
 import '../services/auth_provider.dart';
 import '../theme/theme_provider.dart';
-import '../widgets/chat_message_widget.dart';
+import '../widgets/chat_message.dart';
 import '../widgets/message_input.dart';
 import '../widgets/model_selector.dart';
 import '../widgets/side_panel.dart';
@@ -146,6 +146,9 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     setState(() {
       _isSidePanelExpanded = !_isSidePanelExpanded;
       _saveSidePanelState(_isSidePanelExpanded);
+      
+      // Play a subtle haptic feedback when toggling the panel
+      HapticFeedback.lightImpact();
     });
   }
 
@@ -216,41 +219,66 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
             // Main chat area
             Expanded(
               child: Stack(
+                clipBehavior: Clip.none,
                 children: [
                   // Side panel and chat messages
                   Row(
                     children: [
-                      // Side panel
-                      if (_isSidePanelExpanded)
-                        SidePanel(
-                          onNewChat: () {
-                            chatProvider.clearChat();
-                            chatProvider.resetTokenAndCostTracking();
-                          },
-                          onToggle: _toggleSidePanel,
-                          isExpanded: _isSidePanelExpanded,
+                      // Side panel with animated container
+                      ClipRect(
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 300),
+                          curve: Curves.easeOutCubic,
+                          width: _isSidePanelExpanded ? null : 0,
+                          child: _isSidePanelExpanded 
+                              ? SidePanel(
+                                  onNewChat: () {
+                                    chatProvider.clearChat();
+                                    chatProvider.resetTokenAndCostTracking();
+                                  },
+                                  onToggle: _toggleSidePanel,
+                                  isExpanded: _isSidePanelExpanded,
+                                  animationDuration: const Duration(milliseconds: 300),
+                                )
+                              : null,
                         ),
+                      ),
                       
-                      // Chat messages area
+                      // Chat messages area with animated width and shadow
                       Expanded(
-                        child: Column(
-                          children: [
-                            // App bar
-                            _buildAppBar(context, isDarkMode),
-                            
-                            // Messages list
-                            Expanded(
-                              child: _buildMessagesList(chatProvider),
-                            ),
-                            
-                            // Message input
-                            Padding(
-                              padding: EdgeInsets.only(
-                                bottom: MediaQuery.of(context).viewPadding.bottom,
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 300),
+                          curve: Curves.easeOutCubic,
+                          decoration: BoxDecoration(
+                            // Add a subtle shadow when side panel is expanded
+                            boxShadow: [
+                              if (_isSidePanelExpanded)
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.05),
+                                  offset: const Offset(-2, 0),
+                                  blurRadius: 8,
+                                )
+                            ],
+                          ),
+                          child: Column(
+                            children: [
+                              // App bar
+                              _buildAppBar(context, isDarkMode),
+                              
+                              // Messages list
+                              Expanded(
+                                child: _buildMessagesList(chatProvider),
                               ),
-                              child: _buildMessageInput(chatProvider, isAuthenticated),
-                            ),
-                          ],
+                              
+                              // Message input
+                              Padding(
+                                padding: EdgeInsets.only(
+                                  bottom: MediaQuery.of(context).viewPadding.bottom,
+                                ),
+                                child: _buildMessageInput(chatProvider, isAuthenticated),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ],
@@ -315,9 +343,12 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       ),
       child: Row(
         children: [
-          // Side panel toggle - always visible now
+          // Add padding before the button to move it right
+          const SizedBox(width: 8),
+          
+          // Side panel toggle with consistent hamburger icon
           IconButton(
-            icon: Icon(_isSidePanelExpanded ? Icons.menu_open : Icons.menu),
+            icon: const Icon(Icons.menu),
             onPressed: _toggleSidePanel,
             tooltip: _isSidePanelExpanded ? 'Close side panel' : 'Open side panel',
           ),
@@ -326,7 +357,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 16),
             child: Text(
-              'AI Chat',
+              'Otto',
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
@@ -477,11 +508,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                     }
                   }
 
+                  // Removed isStreaming and streamedContent parameters as they are not used by the updated ChatMessageWidget
                   return ChatMessageWidget(
                     key: ValueKey(message.id),
                     message: message,
-                    isStreaming: isStreaming,
-                    streamedContent: isStreaming ? chatProvider.currentStreamedResponse : message.content,
                   );
                 },
               ),
@@ -503,7 +533,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         left: 16,
         right: 16,
         bottom: 16,
-        top: 0,
+        top: 8,
       ),
       decoration: BoxDecoration(
         gradient: LinearGradient(
@@ -533,7 +563,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
           child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 8),
+            padding: EdgeInsets.zero,
             color: Colors.transparent,
             child: !hasModels || selectedModel == null
                 ? _buildNoModelsInput()
@@ -573,6 +603,15 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   }
 
   Widget _buildNoModelsInput() {
+    final chatProvider = Provider.of<ChatProvider>(context);
+    final hasModels = chatProvider.availableModels.isNotEmpty;
+    final isLoading = chatProvider.isLoading;
+    final selectedModel = chatProvider.selectedModel;
+    
+    final String errorMessage = hasModels 
+        ? 'Cannot send messages: No model selected' 
+        : 'Cannot send messages: Connection to AI service unavailable';
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
@@ -584,7 +623,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           const SizedBox(width: 12),
           Expanded(
             child: Text(
-              'Cannot send messages: No models available from backend',
+              errorMessage,
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                 color: Theme.of(context).colorScheme.error,
               ),
@@ -592,10 +631,16 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           ),
           TextButton.icon(
             onPressed: () {
-              context.read<ChatProvider>().initialize(syncModelsWithBackend: true);
+              if (hasModels) {
+                // If models are available but none selected, show model selector
+                _showModelSelector(context, chatProvider);
+              } else {
+                // If no models available, retry connection
+                context.read<ChatProvider>().initialize(syncModelsWithBackend: true);
+              }
             },
-            icon: const Icon(Icons.refresh),
-            label: const Text('Retry'),
+            icon: Icon(hasModels ? Icons.model_training : Icons.refresh),
+            label: Text(hasModels ? 'Select' : 'Retry'),
           ),
         ],
       ),
@@ -697,6 +742,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                     : Theme.of(context).colorScheme.error.withOpacity(0.7),
                 ),
               const SizedBox(height: 24),
+              
+              // Main title based on state
               if (isLoading)
                 Text(
                   'Setting up your conversation...',
@@ -705,9 +752,17 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                 )
               else if (!hasModels)
                 Text(
-                  'Cannot start conversation',
+                  'Unable to connect to the AI service',
                   style: Theme.of(context).textTheme.titleLarge?.copyWith(
                     color: Theme.of(context).colorScheme.error,
+                  ),
+                  textAlign: TextAlign.center,
+                )
+              else if (selectedModel == null)
+                Text(
+                  'No model selected',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    color: Theme.of(context).colorScheme.primary,
                   ),
                   textAlign: TextAlign.center,
                 )
@@ -717,23 +772,35 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   style: Theme.of(context).textTheme.titleLarge,
                   textAlign: TextAlign.center,
                 ),
+                
               const SizedBox(height: 8),
-              if (!isLoading && hasModels)
-                Text(
-                  'Type a message to start chatting',
-                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
-                  ),
-                  textAlign: TextAlign.center,
-                )
-              else if (!isLoading && !hasModels)
-                Text(
-                  'No models available from the backend server',
-                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    color: Theme.of(context).colorScheme.error.withOpacity(0.7),
-                  ),
-                  textAlign: TextAlign.center,
-                ),
+              
+              // Subtitle based on state
+              if (!isLoading) ...[
+                if (hasModels && selectedModel != null)
+                  Text(
+                    'Type a message to start chatting',
+                    style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+                    ),
+                    textAlign: TextAlign.center,
+                  )
+                else if (hasModels && selectedModel == null)
+                  Text(
+                    'Please select a model to continue',
+                    style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                      color: Theme.of(context).colorScheme.primary.withOpacity(0.7),
+                    ),
+                    textAlign: TextAlign.center,
+                  )
+                else if (!hasModels)
+                  Text(
+                    'Check your internet connection and try again',
+                    style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                      color: Theme.of(context).colorScheme.error.withOpacity(0.7),
+                    ),
+                  )
+              ],
               
               if (errorMessage != null) ...[
                 const SizedBox(height: 24),
@@ -784,7 +851,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                         ),
                         const SizedBox(width: 8),
                         Text(
-                          'Model Connectivity',
+                          'AI Service Status',
                           style: Theme.of(context).textTheme.titleMedium,
                         ),
                       ],
@@ -792,20 +859,23 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                     const SizedBox(height: 8),
                     Text(
                       hasModels
-                        ? 'Successfully loaded ${chatProvider.availableModels.length} models\n'
-                          'Current model: ${selectedModel?.displayName ?? "None"}'
-                        : 'Unable to connect to the model service\n'
-                          'Please check your backend connection',
+                        ? selectedModel != null
+                            ? 'Connected successfully\n'
+                              'Current model: ${selectedModel.displayName}'
+                            : 'Connected successfully\n'
+                              'No model selected - please select one'
+                        : 'Unable to connect to the AI service\n'
+                          'Please check your internet connection and try again',
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                         fontWeight: hasModels ? FontWeight.normal : FontWeight.bold,
                       ),
                     ),
                     const SizedBox(height: 12),
                     Text(
-                      'Backend URL: ${EnvConfig.backendUrl}',
+                      'Service address: ${EnvConfig.backendUrl}',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         fontFamily: 'monospace',
-                        color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+                        color: Theme.of(context).colorScheme.onSurface.withOpacity(0.4),
                       ),
                     ),
                     
@@ -818,7 +888,25 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                             chatProvider.initialize(syncModelsWithBackend: true);
                           },
                           icon: const Icon(Icons.refresh),
-                          label: const Text('Retry Connection'),
+                          label: const Text('Try Again'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Theme.of(context).colorScheme.primary,
+                            foregroundColor: Theme.of(context).colorScheme.onPrimary,
+                          ),
+                        ),
+                      ),
+                    ],
+                    
+                    if (hasModels && selectedModel == null) ... [
+                      const SizedBox(height: 16),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: () {
+                            _showModelSelector(context, chatProvider);
+                          },
+                          icon: const Icon(Icons.model_training),
+                          label: const Text('Select Model'),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Theme.of(context).colorScheme.primary,
                             foregroundColor: Theme.of(context).colorScheme.onPrimary,
@@ -1078,7 +1166,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
-              ),
+                ),
               child: Text(
                 'Cancel',
                 style: TextStyle(
@@ -1109,4 +1197,4 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       },
     );
   }
-} 
+}

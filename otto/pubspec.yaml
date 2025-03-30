@@ -18,12 +18,15 @@ dependencies:
   flutter_dotenv: ^5.1.0
   flutter_markdown: ^0.7.6+2
   markdown: ^7.2.1
-  flutter_highlight: ^0.7.0
+  flutter_highlight:
+    path: ../highlight.dart/flutter_highlight
   url_launcher: ^6.2.4
   flutter_launcher_icons: ^0.14.3
   simple_animations: ^5.1.0
   flutter_animate: ^4.5.0
   flutter_chat_types: ^3.6.2
+  gpt_markdown:
+    path: ../gpt_markdown # Ensure gpt_markdown also uses local path
 
 dev_dependencies:
   flutter_test:

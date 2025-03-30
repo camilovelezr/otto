@@ -17,9 +17,33 @@ class ThemeProvider extends ChangeNotifier {
   // import '../theme/app_spacing.dart';
   // Then use: AppSpacing.blockSpacing, AppSpacing.headerSpacer, etc.
 
-  static const _primaryGradient = [Color(0xFF7B61FF), Color(0xFF9C8FFF)];
-  static const _secondaryGradient = [Color(0xFFFF6B6B), Color(0xFFFF8E8E)];
-  static const _accentGradient = [Color(0xFF48DAD0), Color(0xFF76E8E0)];
+  // Enhanced gradients with more intermediate steps for smoother transitions
+  static const _primaryGradient = [
+    Color(0xFF7B61FF),
+    Color(0xFF8269FF),
+    Color(0xFF8971FF),
+    Color(0xFF8F79FF),
+    Color(0xFF9582FF),
+    Color(0xFF9C8FFF),
+  ];
+  
+  static const _secondaryGradient = [
+    Color(0xFFFF6B6B),
+    Color(0xFFFF7373),
+    Color(0xFFFF7A7A),
+    Color(0xFFFF8282),
+    Color(0xFFFF8989),
+    Color(0xFFFF8E8E),
+  ];
+  
+  static const _accentGradient = [
+    Color(0xFF48DAD0),
+    Color(0xFF52DDD4),
+    Color(0xFF5CE0D8),
+    Color(0xFF66E3DC),
+    Color(0xFF6EE6DE),
+    Color(0xFF76E8E0),
+  ];
 
   Future<void> _loadTheme() async {
     _prefs = await SharedPreferences.getInstance();
@@ -122,7 +146,7 @@ class ThemeProvider extends ChangeNotifier {
       ),
       bodyLarge: TextStyle(
         fontFamily: 'Inter',
-        fontSize: 14,
+        fontSize: 16,
         color: baseColor.withOpacity(0.9),
         height: 1.5,
         letterSpacing: 0.1,
@@ -238,17 +262,20 @@ class ThemeProvider extends ChangeNotifier {
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
         colors: _primaryGradient,
+        stops: const [0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
       );
 
   LinearGradient get secondaryGradient => LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
         colors: _secondaryGradient,
+        stops: const [0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
       );
 
   LinearGradient get accentGradient => LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
         colors: _accentGradient,
+        stops: const [0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
       );
 } 

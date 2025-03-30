@@ -140,6 +140,8 @@ async def save_streamed_message(
             )
             return
 
+        logger.info(f"Saving streamed message to conversation {conversation_id}")
+        logger.info(f"Content: {content}")
         # Add the assistant message to the conversation
         await conversation.add_assistant_message(
             content=content,

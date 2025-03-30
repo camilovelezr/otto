@@ -45,6 +45,8 @@ class ChatProvider with ChangeNotifier {
   bool get isLoadingModels => _isLoadingModels; // New getter for model loading state
   String? get error => _error;
   String? get conversationId => _currentConversationId;
+  String? get currentUserId => _currentUserId; // Add getter
+  String? get currentUserName => _currentUserName; // Add getter
   String get currentStreamedResponse => _currentStreamedResponse;
   
   // Token and cost tracking getters
@@ -718,8 +720,12 @@ class ChatProvider with ChangeNotifier {
       _isLoadingModels = true;
       notifyListeners();
       
-      // Only use the /models/list endpoint to get models
-      final models = await _modelService.getModels();
+      // Call the syncModels endpoint instead of just getModels
+      debugPrint('Calling syncModels from ChatProvider for user: $_currentUserId, username: $_currentUserName');
+      final models = await _modelService.syncModels(
+        userId: _currentUserId, 
+        username: _currentUserName
+      );
       
       if (models.isNotEmpty) {
         _availableModels = models;
@@ -860,4 +866,4 @@ class ChatProvider with ChangeNotifier {
       return false;
     }
   }
-} 
+}

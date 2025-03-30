@@ -7,12 +7,12 @@ import 'package:flutter/material.dart';
 class AppSpacing {
   AppSpacing._(); // Private constructor to prevent instantiation
   
-  // Primary spacing constants
-  static const double blockSpacing = 16.0;     // Major section breaks and between UI components
-  static const double headerBottomSpacing = 12.0; // Spacing after headers/section titles
-  static const double paragraphSpacing = 10.0;  // Separation between text blocks
-  static const double inlineSpacing = 8.0;     // Moderate separation between related elements
-  static const double listItemSpacing = 4.0;   // Tight spacing between sequence items
+  // Primary spacing constants - REDUCED to eliminate excessive whitespace
+  static const double blockSpacing = 5.0;     // Major section breaks and between UI components (reduced from 16.0)
+  static const double headerBottomSpacing = 3.0; // Spacing after headers/section titles (reduced from 12.0)
+  static const double paragraphSpacing = 3.5;  // Separation between text blocks (reduced from 10.0)
+  static const double inlineSpacing = 3.0;     // Moderate separation between related elements (reduced from 8.0)
+  static const double listItemSpacing = 1.5;   // Tight spacing between sequence items (reduced from 4.0)
 
   // Additional semantic spacings based on primary constants
   static const double screenPadding = blockSpacing;
@@ -51,7 +51,7 @@ class AppSpacing {
   static double responsiveSpacing(BuildContext context, double baseSpacing) {
     final screenWidth = MediaQuery.of(context).size.width;
     if (screenWidth > 1200) {
-      return baseSpacing * 1.25; // Larger spacing on desktop
+      return baseSpacing * 1.15; // Slightly larger spacing on desktop (reduced from 1.25)
     } else if (screenWidth < 600) {
       return baseSpacing * 0.85; // Tighter spacing on mobile
     }
