@@ -1,4 +1,5 @@
 import 'dart:ui';
+import 'package:flutter/foundation.dart'; // Import foundation for platform check
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -6,6 +7,9 @@ import '../services/chat_provider.dart';
 import 'theme_toggle.dart';
 import 'dart:math' as math; // Use math prefix
 import '../services/auth_provider.dart';
+import '../screens/export_key_screen.dart'; // Import export screen
+import '../screens/import_key_screen.dart'; // Import import screen
+import '../models/conversation_summary.dart'; // Import ConversationSummary
 // Removed intl import as cost info is removed
 
 class SidePanel extends StatefulWidget {
@@ -27,25 +31,15 @@ class SidePanel extends StatefulWidget {
 }
 
 class _SidePanelState extends State<SidePanel> with TickerProviderStateMixin {
-  late AnimationController _clearButtonController;
-  late Animation<double> _clearButtonAnimation;
   late AnimationController _panelAnimationController;
   late Animation<double> _slideAnimation;
   late Animation<double> _opacityAnimation;
   bool _isDebugInfoExpanded = false; // State for debug section expansion
+  int? _hoveredIndex; // State to track hovered conversation index
 
   @override
   void initState() {
     super.initState();
-    _clearButtonController = AnimationController(
-      duration: const Duration(milliseconds: 200),
-      vsync: this,
-    );
-    _clearButtonAnimation = CurvedAnimation(
-      parent: _clearButtonController,
-      curve: Curves.easeOutCubic,
-    );
-    
     // Create dedicated controller for panel animations
     _panelAnimationController = AnimationController(
       duration: widget.animationDuration,
@@ -91,145 +85,8 @@ class _SidePanelState extends State<SidePanel> with TickerProviderStateMixin {
   
   @override
   void dispose() {
-    _clearButtonController.dispose();
     _panelAnimationController.dispose();
     super.dispose();
-  }
-
-  Future<void> _showClearConfirmation(BuildContext context) async {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-
-    return showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          backgroundColor: isDark 
-              ? Color.lerp(theme.colorScheme.surface, Colors.black, 0.3)
-              : Color.lerp(theme.colorScheme.surface, Colors.white, 0.3),
-          surfaceTintColor: Colors.transparent,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(24),
-          ),
-          title: Text(
-            'Clear All Messages',
-            style: theme.textTheme.titleLarge?.copyWith(
-              color: theme.colorScheme.onSurface,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          content: Text(
-            'Are you sure you want to clear all messages? This action cannot be undone.',
-            style: theme.textTheme.bodyLarge?.copyWith(
-              color: theme.colorScheme.onSurface.withOpacity(0.8),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              style: TextButton.styleFrom(
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-              child: Text(
-                'Cancel',
-                style: TextStyle(
-                  color: theme.colorScheme.primary.withOpacity(0.8),
-                ),
-              ),
-            ),
-            TextButton(
-              onPressed: () {
-                context.read<ChatProvider>().clearChat();
-                Navigator.of(context).pop();
-                HapticFeedback.mediumImpact();
-              },
-              style: TextButton.styleFrom(
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-              child: Text(
-                'Clear All',
-                style: TextStyle(
-                  color: theme.colorScheme.error,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _buildClearButton(ThemeData theme) {
-    final isDark = theme.brightness == Brightness.dark;
-
-    return MouseRegion(
-      onEnter: (_) => _clearButtonController.forward(),
-      onExit: (_) => _clearButtonController.reverse(),
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: () {
-              HapticFeedback.lightImpact();
-              _showClearConfirmation(context);
-            },
-            borderRadius: BorderRadius.circular(12),
-            child: AnimatedBuilder(
-              animation: _clearButtonAnimation,
-              builder: (context, child) {
-                return Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  decoration: BoxDecoration(
-                    color: Color.lerp(
-                      Colors.transparent,
-                      theme.colorScheme.error.withOpacity(0.1),
-                      _clearButtonAnimation.value,
-                    ),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: theme.colorScheme.error.withOpacity(0.1),
-                      width: 1,
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.max,
-                    children: [
-                      Icon(
-                        Icons.delete_outline_rounded,
-                        size: 20,
-                        color: Color.lerp(
-                          theme.colorScheme.error.withOpacity(0.5),
-                          theme.colorScheme.error,
-                          _clearButtonAnimation.value,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Clear Messages',
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: Color.lerp(
-                            theme.colorScheme.error.withOpacity(0.5),
-                            theme.colorScheme.error,
-                            _clearButtonAnimation.value,
-                          ),
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-          ),
-        ),
-      ),
-    );
   }
 
   @override
@@ -301,19 +158,21 @@ class _SidePanelState extends State<SidePanel> with TickerProviderStateMixin {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         _buildHeader(theme),
-                        _buildClearButton(theme),
-                        _buildSignOutButton(theme),
-                        _buildDebugInfoSection(theme, chatProvider), // Add Debug Info Section
+                        _buildNewConversationButton(theme, chatProvider), // Add New Conversation Button
+                        const SizedBox(height: 16), // Increased spacing after button
+                        // --- Conversation List (No explicit title) ---
                         Expanded(
-                          child: SingleChildScrollView(
-                            physics: const BouncingScrollPhysics(),
-                            child: Column(
-                              children: [
-                                // Add your side panel content here
-                              ],
-                            ),
-                          ),
+                          child: _buildConversationList(theme, chatProvider), // Title row removed
                         ),
+                        // --- End Conversation List ---
+                        const Divider(height: 1, indent: 24, endIndent: 24),
+                        _buildKeyManagementButtons(theme), // Add Key Management Buttons
+                        const Divider(height: 1, indent: 24, endIndent: 24),
+                        _buildDebugInfoSection(theme, chatProvider), // Add Debug Info Section
+                        const Spacer(), // Pushes content below to the bottom
+                        const Divider(height: 1, indent: 24, endIndent: 24),
+                        _buildSignOutButton(theme), // Moved Sign Out Button
+                        const SizedBox(height: 16), // Padding at the bottom
                       ],
                     ),
                   ),
@@ -325,6 +184,342 @@ class _SidePanelState extends State<SidePanel> with TickerProviderStateMixin {
       },
     );
   }
+
+  // --- New Widget: Conversation List ---
+  Widget _buildConversationList(ThemeData theme, ChatProvider chatProvider) {
+    if (chatProvider.isLoadingConversations) {
+      return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+    }
+
+    if (chatProvider.conversationList.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Text(
+            'No conversations yet.\nStart chatting!',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurface.withOpacity(0.6),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      itemCount: chatProvider.conversationList.length,
+      itemBuilder: (context, index) {
+        final conversation = chatProvider.conversationList[index];
+        final isSelected = chatProvider.conversationId == conversation.id;
+        final isHovered = _hoveredIndex == index;
+        final isMobile = defaultTargetPlatform == TargetPlatform.android || defaultTargetPlatform == TargetPlatform.iOS;
+
+        Widget? trailingWidget;
+        if (isMobile) {
+          // Always show menu on mobile
+          trailingWidget = _buildConversationMenu(context, theme, chatProvider, conversation);
+        } else if (isHovered) {
+          // Show menu on hover for desktop/web
+          trailingWidget = _buildConversationMenu(context, theme, chatProvider, conversation);
+        }
+
+        Widget listTile = ListTile(
+              dense: true,
+              title: Text(
+              conversation.title ?? 'New Conversation',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                color: isSelected ? theme.colorScheme.primary : theme.colorScheme.onSurface.withOpacity(0.8),
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            trailing: trailingWidget, // Use the determined trailing widget
+            // subtitle: Text( // Optional: Show last updated time
+            //   'Updated: ${conversation.updatedAt.toLocal()}',
+            //   style: theme.textTheme.bodySmall?.copyWith(
+            //     color: theme.colorScheme.onSurface.withOpacity(0.5),
+            //   ),
+            // ),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            selected: isSelected,
+            selectedTileColor: theme.colorScheme.primary.withOpacity(0.1),
+            // Restore ListTile onTap
+            onTap: () {
+              if (!isSelected) {
+                HapticFeedback.lightImpact();
+                chatProvider.loadConversation(conversation.id);
+                // Optionally close the panel on selection if desired
+                // widget.onToggle();
+              }
+            },
+          ); // ListTile close
+
+        // Restore MouseRegion wrapper for non-mobile platforms
+        if (isMobile) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+            child: listTile,
+          );
+        } else {
+          return MouseRegion(
+            onEnter: (_) => setState(() => _hoveredIndex = index),
+            onExit: (_) => setState(() => _hoveredIndex = null),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+              child: listTile,
+            ),
+          );
+        }
+    }, // itemBuilder close
+  ); // ListView.builder close
+  }
+  // --- End New Widget ---
+
+  // --- New Widget: Conversation Item Menu ---
+  Widget _buildConversationMenu(BuildContext context, ThemeData theme, ChatProvider chatProvider, ConversationSummary conversation) {
+    // Use a local variable for context to avoid potential shadowing issues inside callbacks
+    final BuildContext menuContext = context;
+    // Create a GlobalKey to access the button's position
+    final GlobalKey popupKey = GlobalKey();
+
+    // Define the menu items builder function separately
+    List<PopupMenuEntry<String>> itemBuilder(BuildContext context) => <PopupMenuEntry<String>>[
+      PopupMenuItem<String>(
+        value: 'rename',
+        child: Text('Rename', style: theme.textTheme.bodyMedium),
+      ),
+      PopupMenuItem<String>(
+        value: 'delete',
+        child: Text('Delete', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.error)),
+      ),
+    ];
+
+    // Define the onSelected logic separately
+    void handleSelection(String result) {
+      debugPrint('[SidePanel] PopupMenuButton onSelected triggered with result: $result');
+      switch (result) {
+        case 'rename':
+          debugPrint('[SidePanel] Rename selected for conversation: ${conversation.id}');
+          _showRenameDialog(menuContext, chatProvider, conversation); // Use menuContext
+          break;
+        case 'delete':
+          debugPrint('[SidePanel] Delete selected for conversation: ${conversation.id}');
+          _showDeleteConfirmationDialog(menuContext, chatProvider, conversation); // Use menuContext
+          break;
+        default:
+          debugPrint('[SidePanel] Unknown menu item selected: $result');
+      }
+    }
+
+    // Wrap the Icon itself (the visible part of the button) in a GestureDetector
+    return GestureDetector(
+      key: popupKey, // Assign the key here
+      behavior: HitTestBehavior.opaque, // Ensure it captures taps within its bounds
+      child: Padding( // Add some padding to make the tap target slightly larger
+        padding: const EdgeInsets.all(8.0), // Adjust padding as needed
+        child: Icon(Icons.more_horiz, size: 18, color: theme.colorScheme.onSurface.withOpacity(0.4)),
+      ),
+      onTap: () {
+        debugPrint('[SidePanel] GestureDetector tapped for menu on conversation: ${conversation.id}');
+        // Find the RenderBox of the GestureDetector
+        final RenderBox renderBox = popupKey.currentContext!.findRenderObject() as RenderBox;
+        // Get the position relative to the overlay
+        final Offset offset = renderBox.localToGlobal(Offset.zero);
+        // Show the menu manually
+        showMenu<String>(
+          context: menuContext,
+          position: RelativeRect.fromLTRB(
+            offset.dx, // Left
+            offset.dy, // Top
+            offset.dx + renderBox.size.width, // Right
+            offset.dy + renderBox.size.height, // Bottom
+          ),
+          items: itemBuilder(menuContext), // Pass the items builder
+          elevation: 4,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          color: theme.colorScheme.surface,
+        ).then((String? result) {
+          // Handle selection if a value is returned (user tapped an item)
+          if (result != null) {
+            handleSelection(result);
+          } else {
+             debugPrint('[SidePanel] Menu dismissed without selection.');
+          }
+        });
+      },
+    );
+
+    /* // Original PopupMenuButton code (commented out)
+    return PopupMenuButton<String>(
+      icon: Icon(Icons.more_horiz, size: 18, color: theme.colorScheme.onSurface.withOpacity(0.4)),
+      tooltip: 'Conversation Options',
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(),
+      enabled: true, // Explicitly enable the button
+      onSelected: (String result) {
+        // Add debug print here
+        debugPrint('[SidePanel] PopupMenuButton onSelected triggered with result: $result');
+        switch (result) {
+          case 'rename':
+             // Add debug print here
+            debugPrint('[SidePanel] Rename selected for conversation: ${conversation.id}');
+            _showRenameDialog(menuContext, chatProvider, conversation); // Use menuContext
+            break;
+          case 'delete':
+             // Add debug print here
+            debugPrint('[SidePanel] Delete selected for conversation: ${conversation.id}');
+            _showDeleteConfirmationDialog(menuContext, chatProvider, conversation); // Use menuContext
+            break;
+          default:
+             debugPrint('[SidePanel] Unknown menu item selected: $result');
+        }
+      },
+      itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+        PopupMenuItem<String>(
+          value: 'rename',
+          child: Text('Rename', style: theme.textTheme.bodyMedium),
+        ),
+        PopupMenuItem<String>(
+          value: 'delete',
+          child: Text('Delete', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.error)),
+        ),
+      ],
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      color: theme.colorScheme.surface,
+      elevation: 4,
+    );
+    */
+  }
+  // --- End New Widget ---
+
+  // --- Placeholder for Delete Confirmation ---
+  Future<void> _showDeleteConfirmationDialog(BuildContext context, ChatProvider chatProvider, ConversationSummary conversation) async {
+     final theme = Theme.of(context);
+     return showDialog<void>(
+        context: context,
+        barrierDismissible: false, // User must tap button!
+        builder: (BuildContext dialogContext) {
+          return AlertDialog(
+            title: const Text('Delete Conversation?'),
+            content: SingleChildScrollView(
+              child: ListBody(
+                children: <Widget>[
+                  Text('Are you sure you want to delete "${conversation.title ?? 'this conversation'}"?'),
+                  const Text('This action cannot be undone.'),
+                ],
+              ),
+            ),
+            actions: <Widget>[
+              TextButton(
+                child: const Text('Cancel'),
+                onPressed: () {
+                  Navigator.of(dialogContext).pop();
+                },
+              ),
+              TextButton(
+                child: Text('Delete', style: TextStyle(color: theme.colorScheme.error)),
+            onPressed: () async { // Make async
+              Navigator.of(dialogContext).pop(); // Close dialog first
+              try {
+                await chatProvider.deleteConversation(conversation.id);
+                HapticFeedback.mediumImpact();
+              } catch (e) {
+                // Show error if deletion fails
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Failed to delete conversation: $e')),
+                );
+              }
+                },
+              ),
+            ],
+          );
+        },
+      );
+  }
+  // --- End Placeholder ---
+
+  // --- New Widget: Rename Dialog ---
+  Future<void> _showRenameDialog(BuildContext context, ChatProvider chatProvider, ConversationSummary conversation) async {
+    final theme = Theme.of(context);
+    final TextEditingController renameController = TextEditingController(text: conversation.title);
+    final formKey = GlobalKey<FormState>(); // Add form key for validation
+
+    return showDialog<void>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('Rename Conversation'),
+          content: Form( // Wrap with Form
+            key: formKey,
+            child: TextFormField( // Use TextFormField for validation
+              controller: renameController,
+              autofocus: true,
+              decoration: const InputDecoration(hintText: 'Enter new title'),
+              validator: (value) { // Add validator
+                if (value == null || value.trim().isEmpty) {
+                  return 'Title cannot be empty';
+                }
+                return null;
+              },
+            ),
+          ),
+          actions: <Widget>[
+            TextButton(
+              child: const Text('Cancel'),
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+              },
+            ),
+            TextButton(
+              child: const Text('Rename'),
+              onPressed: () async { // Make async
+                if (formKey.currentState!.validate()) { // Validate before proceeding
+                  final newTitle = renameController.text.trim();
+                  Navigator.of(dialogContext).pop(); // Close dialog first
+                  try {
+                    await chatProvider.renameConversation(conversation.id, newTitle);
+                    HapticFeedback.lightImpact();
+                  } catch (e) {
+                     ScaffoldMessenger.of(context).showSnackBar(
+                       SnackBar(content: Text('Failed to rename conversation: $e')),
+                     );
+                  }
+                }
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+  // --- End New Widget ---
+
+  // --- New Widget: New Conversation Button ---
+  Widget _buildNewConversationButton(ThemeData theme, ChatProvider chatProvider) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+      child: OutlinedButton.icon(
+        icon: const Icon(Icons.add_rounded, size: 20),
+        label: const Text('New Conversation'),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: theme.colorScheme.primary,
+          side: BorderSide(color: theme.colorScheme.primary.withOpacity(0.3)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          minimumSize: const Size(double.infinity, 44), // Ensure consistent height
+        ),
+        onPressed: () {
+          HapticFeedback.lightImpact();
+          chatProvider.requestNewConversation(); // Use the new method
+          // Optionally close the panel if needed
+          // widget.onToggle();
+        },
+      ),
+    );
+  }
+  // --- End New Widget ---
 
   Widget _buildHeader(ThemeData theme) {
     return Container(
@@ -608,4 +803,60 @@ class _SidePanelState extends State<SidePanel> with TickerProviderStateMixin {
       },
     );
   }
+
+  // --- New Widget for Key Management Buttons ---
+  Widget _buildKeyManagementButtons(ThemeData theme) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch, // Make buttons fill width
+        children: [
+          Text(
+            'Account Security',
+            style: theme.textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w600,
+              color: theme.colorScheme.onSurface.withOpacity(0.6),
+            ),
+            textAlign: TextAlign.center, // Center the title
+            ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.qr_code_scanner_rounded, size: 18),
+            label: const Text('Import Key (Scan QR)'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: theme.colorScheme.secondary,
+              side: BorderSide(color: theme.colorScheme.secondary.withOpacity(0.5)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              padding: const EdgeInsets.symmetric(vertical: 10),
+            ),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const ImportKeyScreen()),
+              );
+            },
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.qr_code_2_rounded, size: 18),
+            label: const Text('Export Key (Show QR)'),
+             style: OutlinedButton.styleFrom(
+              foregroundColor: theme.colorScheme.secondary,
+              side: BorderSide(color: theme.colorScheme.secondary.withOpacity(0.5)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              padding: const EdgeInsets.symmetric(vertical: 10),
+            ),
+            onPressed: () {
+               Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const ExportKeyScreen()),
+              );
+            },
+          ),
+          // TODO: Add button for Recovery Phrase later
+        ],
+      ),
+    );
+  }
+  // --- End New Widget ---
 }

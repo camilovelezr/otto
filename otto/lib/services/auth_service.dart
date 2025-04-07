@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user_model.dart';
 import '../config/env_config.dart';
+import 'encryption_service.dart';
 
 class AuthService {
   static const String _tokenKey = 'auth_token';
@@ -16,6 +17,9 @@ class AuthService {
   User? _currentUser;
   String? _token;
   
+  // Instance of encryption service
+  final EncryptionService _encryptionService = EncryptionService();
+  
   // Get the current logged in user
   User? get currentUser => _currentUser;
   
@@ -24,55 +28,126 @@ class AuthService {
   
   // Initialize the auth service (call on app startup)
   Future<void> init() async {
-    await _loadUserFromStorage();
+    try {
+      debugPrint('Starting auth service initialization...');
+      
+      // First load user from storage
+      await _loadUserFromStorage();
+      debugPrint('User loaded from storage: ${_currentUser?.username ?? "none"}');
+      
+      // Initialize encryption service
+      debugPrint('Initializing encryption service...');
+      await _encryptionService.initializeKeys();
+      debugPrint('Encryption service initialized');
+      
+      // Fetch server's public key with retries
+      debugPrint('Fetching server public key...');
+      bool keyFetched = false;
+      int maxRetries = 3;
+      int currentRetry = 0;
+      
+      while (!keyFetched && currentRetry < maxRetries) {
+        try {
+          await _encryptionService.fetchAndStoreServerPublicKey(_baseUrl);
+          debugPrint('Server public key fetched and stored successfully');
+          keyFetched = true;
+        } catch (e) {
+          currentRetry++;
+          debugPrint('Failed to fetch server public key (attempt $currentRetry/$maxRetries): $e');
+          if (currentRetry < maxRetries) {
+            await Future.delayed(Duration(seconds: 2 * currentRetry)); // Exponential backoff
+          }
+        }
+      }
+      
+      if (!keyFetched) {
+        throw Exception('Failed to fetch server public key after $maxRetries attempts');
+      }
+      
+      debugPrint('Auth service initialization completed successfully');
+    } catch (e) {
+      debugPrint('Error during auth service initialization: $e');
+      throw Exception('Auth service initialization failed: $e');
+    }
+  }
+  
+  // Helper method to ensure we have server public key
+  Future<void> _ensureServerPublicKey() async {
+    try {
+      // Try to fetch server public key if we don't have it
+      await _encryptionService.fetchAndStoreServerPublicKey(_baseUrl);
+      debugPrint('Server public key fetched and stored successfully');
+    } catch (e) {
+      debugPrint('Failed to fetch server public key: $e');
+      throw Exception('Failed to fetch server public key: $e');
+    }
   }
   
   // Login with username and password
   Future<User> login(String username, String password) async {
     try {
+      debugPrint('Starting login process for user: $username');
+
+      // First, ensure encryption service is initialized
+      debugPrint('Initializing encryption service...');
+      try {
+        await _encryptionService.initializeKeys();
+        debugPrint('Encryption service initialized successfully');
+      } catch (e) {
+        debugPrint('Failed to initialize encryption service: $e');
+        throw Exception('Failed to initialize encryption: $e');
+      }
+
+      // Ensure we have server's public key
+      await _ensureServerPublicKey();
+
+      // Send login request
+      debugPrint('Sending login request...');
       final response = await http.post(
-        Uri.parse('$_baseUrl/users/$username/verify'),
-        headers: {
-          'Content-Type': 'text/plain',
-          'Accept': 'application/json'
-        },
-        body: password,
+        Uri.parse('$_baseUrl/users/login'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'username': username,
+          'password': password,
+        }),
       );
-      
-      // Handle different status codes
+
+      debugPrint('Login response status: ${response.statusCode}');
+
       switch (response.statusCode) {
         case 200:
-          // Get user details after successful verification
-          final userData = await _getUserData(username);
-          
-          // Set user and token
-          _token = 'temp_token_$username';
-          _currentUser = userData;
-          
+          final data = json.decode(response.body);
+          _token = data['auth_token'];
+
+          // Create user object from response data
+          _currentUser = User(
+            id: data['id'] ?? '',
+            username: data['username'],
+            name: data['name'],
+            password: '[REDACTED]',
+            createdAt: DateTime.parse(data['created_at']),
+            updatedAt: DateTime.parse(data['updated_at']),
+            hasPublicKey: data['has_public_key'] ?? false,
+            keyVersion: data['key_version'] ?? 1,
+            authToken: _token,
+          );
+
           // Save to local storage
           await _saveUserToStorage(_token!, _currentUser!);
-          
+
           return _currentUser!;
-          
+
         case 401:
-          throw Exception('Invalid password');
-          
-        case 404:
-          throw Exception('User not found');
-          
+          throw Exception('Invalid username or password');
+
         default:
-          // Try to parse response body for detailed error
+          debugPrint('Login failed with response: ${response.body}');
           _throwFormattedError(response, 'Login failed');
-          // This line will never be reached due to the throw above, but is needed for null safety
           throw Exception('Login failed: Unknown error');
       }
     } catch (e) {
-      // Rethrow if it's already a formatted Exception
-      if (e is Exception) {
-        rethrow;
-      }
-      // Otherwise wrap in a general login error
-      throw Exception('Login error: $e');
+      debugPrint('Login error: $e');
+      rethrow;
     }
   }
   
@@ -131,6 +206,45 @@ class AuthService {
   // Register a new user
   Future<User> register(String username, String password, String displayName) async {
     try {
+      debugPrint('Starting registration process for user: $username');
+      
+      // First, ensure encryption service is initialized
+      debugPrint('Initializing encryption service...');
+      try {
+        await _encryptionService.initializeKeys();
+        debugPrint('Encryption service initialized successfully');
+      } catch (e) {
+        debugPrint('Failed to initialize encryption service: $e');
+        throw Exception('Failed to initialize encryption: $e');
+      }
+
+      // Fetch server's public key
+      debugPrint('Fetching server public key...');
+      try {
+        await _encryptionService.fetchAndStoreServerPublicKey(_baseUrl);
+        debugPrint('Server public key fetched and stored successfully');
+      } catch (e) {
+        debugPrint('Failed to fetch server public key: $e');
+        throw Exception('Failed to fetch server public key: $e');
+      }
+
+      // Generate new key pair for the user
+      debugPrint('Requesting public key from encryption service...');
+      String? publicKeyPem;
+      try {
+        publicKeyPem = await _encryptionService.getPublicKeyPem();
+        if (publicKeyPem == null) {
+          debugPrint('Failed to get public key - returned null');
+          throw Exception('Failed to get public key from encryption service');
+        }
+        debugPrint('Successfully retrieved public key');
+      } catch (e) {
+        debugPrint('Error getting public key: $e');
+        throw Exception('Failed to get public key: $e');
+      }
+
+      // Register user with the server
+      debugPrint('Sending registration request to server...');
       final response = await http.post(
         Uri.parse('$_baseUrl/users/create'),
         headers: {'Content-Type': 'application/json'},
@@ -141,56 +255,79 @@ class AuthService {
         }),
       );
       
+      debugPrint('Registration response status: ${response.statusCode}');
+      debugPrint('Registration response body: ${response.body}');
+      
       switch (response.statusCode) {
+        case 200:
         case 201:
-          final userData = json.decode(response.body);
+          final data = json.decode(response.body);
+          _token = data['auth_token'];
           
-          // Debug print the response structure
-          debugPrint('Registration response: ${response.body}');
-          debugPrint('Decoded userData: $userData');
-          
-          // Handle id field that might be a Map or empty object
-          if (userData.containsKey('id') && userData['id'] is Map && (userData['id'] as Map).isEmpty) {
-            // Replace empty object with a simple string ID or null
-            userData['id'] = null;
+          if (_token == null) {
+            throw Exception('Server did not return an auth token');
           }
           
-          // Ensure password is never stored in the model
-          if (userData.containsKey('password')) {
-            userData['password'] = '[REDACTED]';
+          // Create user object from response data
+          _currentUser = User(
+            id: data['id'],
+            username: data['username'],
+            name: data['name'],
+            password: '[REDACTED]',
+            createdAt: DateTime.parse(data['created_at']),
+            updatedAt: DateTime.parse(data['updated_at']),
+            hasPublicKey: false, // Will be updated after key upload
+            keyVersion: 1,
+            authToken: _token,
+          );
+          
+          // Upload public key
+          try {
+            final keyResponse = await http.post(
+              Uri.parse('$_baseUrl/users/me/public-key'),
+              headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'X-Username': _currentUser!.username,
+              },
+              body: json.encode({
+                'public_key_pem': publicKeyPem,
+              }),
+            );
+
+            if (keyResponse.statusCode != 200) {
+              debugPrint('Failed to upload public key: ${keyResponse.body}');
+              // Don't throw, just log the error as this is not critical
+            } else {
+              debugPrint('Public key uploaded successfully');
+              // Update the user object with the new key status
+              final keyData = json.decode(keyResponse.body);
+              _currentUser = _currentUser!.copyWith(
+                hasPublicKey: true,
+                keyVersion: keyData['key_version'] as int? ?? 1,
+              );
+            }
+          } catch (e) {
+            debugPrint('Error uploading public key: $e');
+            // Don't throw, just log the error as this is not critical
           }
-          
-          // Set user and token
-          _token = 'temp_token_$username';
-          _currentUser = User.fromJson(userData);
-          
+
           // Save to local storage
           await _saveUserToStorage(_token!, _currentUser!);
           
           return _currentUser!;
           
         case 400:
-          throw Exception('Username already exists');
-          
-        case 422:
-          // Validation error
-          try {
-            final errorData = json.decode(response.body);
-            throw Exception('Registration failed: ${_formatValidationError(errorData)}');
-          } catch (_) {
-            throw Exception('Registration failed: Invalid input data');
-          }
+          _throwFormattedError(response, 'Registration failed');
+          throw Exception('Registration failed: Bad request');
           
         default:
           _throwFormattedError(response, 'Registration failed');
-          // This line will never be reached but is needed for null safety
           throw Exception('Registration failed: Unknown error');
       }
     } catch (e) {
-      if (e is Exception) {
-        rethrow;
-      }
-      throw Exception('Registration error: $e');
+      debugPrint('Registration error: $e');
+      rethrow;
     }
   }
   
@@ -286,9 +423,15 @@ class AuthService {
     if (_token == null) {
       throw Exception('Not authenticated');
     }
+    // Use X-Username header instead of Bearer token for now
+    if (_currentUser?.username == null) {
+       throw Exception('Not authenticated or username missing');
+    }
     return {
       'Content-Type': 'application/json',
-      'Authorization': 'Bearer $_token',
+      'Accept': 'application/json',
+      'X-Username': _currentUser!.username,
     };
   }
-} 
+}
+

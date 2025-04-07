@@ -55,7 +55,8 @@ class ChatMessageWidget extends StatelessWidget {
             ),
             child: SelectionArea( // Make the content selectable
               child: GptMarkdown(
-                message.content,
+                // Display the content (should be decrypted text or placeholder from ChatService)
+                message.content ?? "[Content Unavailable]", // Simplified: removed isEncrypted check
                 // Apply the base text style. GptMarkdown will handle specific element styling internally.
                 style: baseTextStyle,
                 // Removed codeBlockBuilder as it's not supported by GptMarkdown.

@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter/services.dart';
 import 'services/chat_provider.dart';
 import 'services/auth_provider.dart';
+import 'services/encryption_service.dart'; // Import EncryptionService
+import 'services/chat_service.dart'; // Import ChatService
 import 'theme/theme_provider.dart';
+import 'package:google_fonts/google_fonts.dart'; // Import Google Fonts
 import 'screens/chat_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/register_screen.dart';
@@ -12,6 +16,15 @@ import 'theme/app_spacing_example.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Configure system UI for desktop
+  if (!kIsWeb) {
+    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+      systemNavigationBarColor: Colors.transparent,
+      systemNavigationBarDividerColor: Colors.transparent,
+    ));
+  }
   
   try {
     // Load environment configuration with error handling
@@ -25,26 +38,70 @@ void main() async {
     debugPrint('Caught error during environment loading: $e');
   }
   
-  runApp(const MyApp());
+  // Initialize encryption service and fetch server public key
+  final encryptionService = EncryptionService();
+  try {
+    await encryptionService.initializeKeys();
+    await encryptionService.fetchAndStoreServerPublicKey(EnvConfig.backendUrl);
+    debugPrint('Successfully initialized encryption and fetched server public key');
+  } catch (e) {
+    debugPrint('Error initializing encryption: $e');
+  }
+  
+  runApp(MyApp(encryptionService: encryptionService));
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({Key? key}) : super(key: key);
+  final EncryptionService encryptionService;
+  
+  const MyApp({Key? key, required this.encryptionService}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
+        // Provide the pre-initialized EncryptionService
+        Provider.value(value: encryptionService),
         ChangeNotifierProvider(create: (_) => ThemeProvider()),
-        ChangeNotifierProvider(create: (_) => ChatProvider()),
-        ChangeNotifierProvider(create: (_) => AuthProvider()),
+        // Create ChatService within ChatProvider's create, passing EncryptionService
+        ChangeNotifierProvider(
+          create: (context) => ChatProvider(
+             chatService: ChatService(
+               encryptionService: encryptionService // Use the pre-initialized service
+             )
+          )
+        ),
+        ChangeNotifierProvider(
+          create: (context) => AuthProvider()
+        ),
       ],
       child: Consumer<ThemeProvider>(
         builder: (context, themeProvider, _) {
           return MaterialApp(
             title: 'Otto',
             debugShowCheckedModeBanner: false,
-            theme: themeProvider.currentTheme,
+            theme: themeProvider.currentTheme.copyWith(
+              platform: TargetPlatform.macOS,
+              scaffoldBackgroundColor: Colors.white,
+              textTheme: GoogleFonts.notoSansTextTheme( // Apply Noto Sans font
+                themeProvider.currentTheme.textTheme,
+              ),
+              colorScheme: themeProvider.currentTheme.colorScheme.copyWith(
+                background: Colors.white,
+                surface: Colors.white,
+              ),
+            ),
+            darkTheme: themeProvider.currentTheme.copyWith(
+              platform: TargetPlatform.macOS,
+              scaffoldBackgroundColor: const Color(0xFF121212),
+              textTheme: GoogleFonts.notoSansTextTheme( // Apply Noto Sans font
+                themeProvider.currentTheme.textTheme.apply(bodyColor: Colors.white, displayColor: Colors.white), // Ensure text is visible in dark mode
+              ),
+              colorScheme: themeProvider.currentTheme.colorScheme.copyWith(
+                background: const Color(0xFF121212),
+                surface: const Color(0xFF121212),
+              ),
+            ),
             initialRoute: '/',
             routes: {
               '/': (context) => const AuthWrapper(),
@@ -94,4 +151,4 @@ class AuthWrapper extends StatelessWidget {
       return const LoginScreen();
     }
   }
-} 
+}

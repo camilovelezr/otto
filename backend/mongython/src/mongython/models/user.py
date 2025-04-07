@@ -1,81 +1,102 @@
 """MongoDB User Model for Chatbot.  """
 
+from typing import Optional, Dict, Any
 from datetime import datetime
-from beanie import Document, Indexed
-import httpx
-from pydantic import UUID4, BaseModel
-
-from typing import Annotated
+from pydantic import BaseModel, Field
+from mongython.models.base import BaseDocument
 import bcrypt
-import os
-from dotenv import load_dotenv
+import logging
 
-load_dotenv(override=True)
-
-INTERNAL_API_URL = os.getenv("INTERNAL_API_URL")
-LITELLM_URL = os.getenv("LITELLM_URL")
-LITELLM_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY")
-
+logger = logging.getLogger(__name__)
 
 class UserCreate(BaseModel):
+    """Model for user creation request data."""
     username: str
     name: str
     password: str
+    is_admin: bool = False
 
+class User(BaseDocument):
+    """Enhanced user model with authentication and metadata."""
 
-class User(Document):
-    username: Annotated[str, Indexed(unique=True)]
+    # Basic user data
+    username: str = Field(unique=True)
     name: str
-    password: str
-    created_at: datetime
-    auth_token: str
+    hashed_password: str
+    
+    # User metadata
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+    last_login: Optional[datetime] = None
+    is_active: bool = True
+    is_admin: bool = False
+    
+    # E2EE Fields
+    public_key: Optional[str] = None  # PEM format RSA public key
+    key_version: int = Field(default=1)  # For future key rotation support
+
+    # Authentication
+    auth_token: Optional[str] = None  # LiteLLM Virtual Key
+
+    # Additional metadata
+    preferences: Dict[str, Any] = Field(default_factory=dict)
+    profile: Dict[str, Any] = Field(default_factory=dict)
+
+    class Settings:
+        name = "users"
+        indexes = [
+            "username",  # Create an index on username field
+            ("username", "name"),  # Compound index
+        ]
 
     @classmethod
-    async def create_user(cls, user: UserCreate) -> "User":
-        """Create a new user."""
-        hashed_password = bcrypt.hashpw(
-            user.password.encode("utf-8"), bcrypt.gensalt()
-        ).decode("utf-8")
+    async def create_user(
+        cls,
+        username: str,
+        name: str,
+        password: str,
+        is_admin: bool = False,
+    ) -> "User":
+        """Create a new user with hashed password."""
+        # Hash the password
+        salt = bcrypt.gensalt()
+        hashed = bcrypt.hashpw(password.encode(), salt)
 
-        # Get the LiteLLM API URL
-        litellm_url = os.getenv("LITELLM_URL")
-        if not litellm_url:
-            raise ValueError("LITELLM_URL environment variable is not set")
+        now = datetime.now()
+        user = cls(
+            username=username,
+            name=name,
+            hashed_password=hashed.decode(),
+            is_admin=is_admin,
+            created_at=now,
+            updated_at=now,
+        )
+        await user.save()
+        return user
 
-        # Get auth token from litellm
+    async def verify_password(self, password: str) -> bool:
+        """Verify a password against the stored hash."""
         try:
-            async with httpx.AsyncClient(
-                base_url=litellm_url,
-                headers={"Authorization": f"Bearer {LITELLM_MASTER_KEY}"},
-                timeout=10.0,  # 10 second timeout
-            ) as client:
-                response = await client.post(
-                    "/key/generate",
-                    json={
-                        "user_id": user.username,
-                    },
-                )
-
-                if response.status_code != 200:
-                    error_message = f"Failed to generate auth token: {response.text}"
-                    raise ValueError(error_message)
-
-                auth_token = response.json()["token"]
-        except httpx.RequestError as e:
-            # Handle timeout and connection errors
-            raise ValueError(f"Could not connect to LiteLLM service: {str(e)}")
+            return bcrypt.checkpw(
+                password.encode(),
+                self.hashed_password.encode()
+            )
         except Exception as e:
-            raise ValueError(f"Error generating auth token: {str(e)}")
+            logger.error(f"Password verification failed: {e}")
+            return False
 
-        return cls(
-            username=user.username,
-            name=user.name,
-            password=hashed_password,
-            created_at=datetime.now(),
-            auth_token=auth_token,
-        )
-
-    def verify_password(self, plain_password: str) -> bool:
-        return bcrypt.checkpw(
-            plain_password.encode("utf-8"), self.password.encode("utf-8")
-        )
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert user to a dictionary for API responses."""
+        return {
+            "id": str(self.id),
+            "username": self.username,
+            "name": self.name,
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+            "last_login": self.last_login.isoformat() if self.last_login else None,
+            "is_active": self.is_active,
+            "is_admin": self.is_admin,
+            "has_public_key": bool(self.public_key),
+            "preferences": self.preferences,
+            "profile": self.profile,
+        }

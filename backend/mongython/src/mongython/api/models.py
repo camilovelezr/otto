@@ -22,7 +22,9 @@ router = APIRouter(
 logger = logging.getLogger(__name__)
 
 LITELLM_URL = os.getenv("LITELLM_URL")
+LITELLM_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY")
 logger.info(f"LITELLM_URL: {LITELLM_URL}")
+logger.info(f"LITELLM_MASTER_KEY: {LITELLM_MASTER_KEY}")
 
 
 class ModelUpdateRequest(BaseModel):
@@ -87,7 +89,6 @@ async def sync_models_from_litellm():
     # Use internal API call instead of direct LiteLLM call
 
     # Prepare headers with master key for LiteLLM access
-    from mongython.models.user import LITELLM_MASTER_KEY
 
     headers = {"Authorization": f"Bearer {LITELLM_MASTER_KEY}"}
 

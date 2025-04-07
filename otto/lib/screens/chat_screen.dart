@@ -119,9 +119,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final chatProvider = context.read<ChatProvider>();
     await chatProvider.initialize();
     
-    // Explicitly prepare a conversation to ensure we have a conversation ID
-    // before the user sends their first message
-    await chatProvider.prepareConversation();
+    // REMOVED: Explicitly prepare a conversation. This should now be handled by setUserId.
+    // await chatProvider.prepareConversation(); 
   }
 
   Future<void> _loadSavedStates() async {
@@ -225,7 +224,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   Row(
                     children: [
                       // Side panel with animated container
-                      ClipRect(
+                      ClipRect( // Restore ClipRect
                         child: AnimatedContainer(
                           duration: const Duration(milliseconds: 300),
                           curve: Curves.easeOutCubic,
@@ -495,22 +494,25 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   final message = messages[index];
                   final isLastMessage = index == messages.length - 1;
                   final isStreaming = isLastMessage && chatProvider.isLoading;
-                  
-                  // Add debug logging for the last message when streaming
-                  if (isLastMessage) {
-                    debugPrint('Last message - Role: ${message.role}, Content length: ${message.content.length}');
-                    if (message.content.length > 0) {
-                      debugPrint('Message content preview: "${message.content.substring(0, min(50, message.content.length))}..."');
-                    }
-                    debugPrint('isStreaming: $isStreaming, currentStreamedResponse length: ${chatProvider.currentStreamedResponse.length}');
-                    if (chatProvider.currentStreamedResponse.length > 0) {
-                      debugPrint('Stream content preview: "${chatProvider.currentStreamedResponse.substring(0, min(50, chatProvider.currentStreamedResponse.length))}..."');
-                    }
+
+                  // Debug logging for streaming state
+                  if (isLastMessage && isStreaming) {
+                    debugPrint('Rendering streaming message - Content length: ${message.content?.length ?? 0}');
                   }
 
-                  // Removed isStreaming and streamedContent parameters as they are not used by the updated ChatMessageWidget
+                  // Ensure we scroll to bottom for streaming messages
+                  if (isLastMessage && isStreaming) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (_scrollController.hasClients) {
+                        _scrollController.jumpTo(
+                          _scrollController.position.maxScrollExtent,
+                        );
+                      }
+                    });
+                  }
+
                   return ChatMessageWidget(
-                    key: ValueKey(message.id),
+                    key: ValueKey('${message.id}_${message.content?.length ?? 0}_${isStreaming ? DateTime.now().millisecondsSinceEpoch : ''}'),
                     message: message,
                   );
                 },
@@ -734,11 +736,11 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
               if (isLoading)
                 const CircularProgressIndicator()
               else
-                Icon(
-                  hasModels ? Icons.chat_bubble_outline : Icons.error_outline,
+                Icon( // Updated Icon for welcome state
+                  hasModels ? Icons.waving_hand_outlined : Icons.error_outline, // Waving hand icon
                   size: 64,
-                  color: hasModels 
-                    ? Theme.of(context).colorScheme.primary.withOpacity(0.5)
+                  color: hasModels
+                    ? Theme.of(context).colorScheme.primary // Use primary color directly
                     : Theme.of(context).colorScheme.error.withOpacity(0.7),
                 ),
               const SizedBox(height: 24),
@@ -767,9 +769,12 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   textAlign: TextAlign.center,
                 )
               else
-                Text(
-                  'Start a new conversation',
-                  style: Theme.of(context).textTheme.titleLarge,
+                Text( // Personalized welcome message
+                  'Hi, ${chatProvider.currentUserName ?? 'there'}!',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                     fontWeight: FontWeight.w600, // Slightly bolder
+                     color: Theme.of(context).colorScheme.primary, // Use primary color
+                  ),
                   textAlign: TextAlign.center,
                 ),
                 
@@ -779,7 +784,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
               if (!isLoading) ...[
                 if (hasModels && selectedModel != null)
                   Text(
-                    'Type a message to start chatting',
+                    'How can I help you today?', // Updated welcome subtitle
                     style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                       color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
                     ),
@@ -820,103 +825,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                 ),
               ],
               
-              // Show model connectivity status
-              const SizedBox(height: 24),
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: hasModels
-                    ? Theme.of(context).colorScheme.surfaceVariant
-                    : Theme.of(context).colorScheme.errorContainer,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: hasModels
-                      ? Theme.of(context).dividerColor
-                      : Theme.of(context).colorScheme.error,
-                    width: 1,
-                  ),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          hasModels ? Icons.check_circle : Icons.warning,
-                          color: hasModels
-                            ? Theme.of(context).colorScheme.primary
-                            : Theme.of(context).colorScheme.error,
-                          size: 20,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          'AI Service Status',
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      hasModels
-                        ? selectedModel != null
-                            ? 'Connected successfully\n'
-                              'Current model: ${selectedModel.displayName}'
-                            : 'Connected successfully\n'
-                              'No model selected - please select one'
-                        : 'Unable to connect to the AI service\n'
-                          'Please check your internet connection and try again',
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        fontWeight: hasModels ? FontWeight.normal : FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      'Service address: ${EnvConfig.backendUrl}',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        fontFamily: 'monospace',
-                        color: Theme.of(context).colorScheme.onSurface.withOpacity(0.4),
-                      ),
-                    ),
-                    
-                    if (!hasModels) ... [
-                      const SizedBox(height: 16),
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton.icon(
-                          onPressed: () {
-                            chatProvider.initialize(syncModelsWithBackend: true);
-                          },
-                          icon: const Icon(Icons.refresh),
-                          label: const Text('Try Again'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Theme.of(context).colorScheme.primary,
-                            foregroundColor: Theme.of(context).colorScheme.onPrimary,
-                          ),
-                        ),
-                      ),
-                    ],
-                    
-                    if (hasModels && selectedModel == null) ... [
-                      const SizedBox(height: 16),
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton.icon(
-                          onPressed: () {
-                            _showModelSelector(context, chatProvider);
-                          },
-                          icon: const Icon(Icons.model_training),
-                          label: const Text('Select Model'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Theme.of(context).colorScheme.primary,
-                            foregroundColor: Theme.of(context).colorScheme.onPrimary,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
+              // Removed the AI Service Status box as requested
             ],
           ),
         ),

@@ -4,23 +4,26 @@ import uuid
 from typing import Dict, List, Optional, Any, Annotated
 from datetime import datetime
 from pydantic import BaseModel, Field, UUID4
-from beanie import Document, Link, Indexed
+from beanie import Link, Indexed
+import base64
+from mongython.utils.encryption import generate_aes_key, encrypt_with_rsa_public_key, load_public_key_from_pem
+import logging
+from mongython.models.base import BaseDocument
+from mongython.models.message import TokenWindowState, Message
 from mongython.models.user import User
-from mongython.models.message import Message, TokenWindowState
+
+logger = logging.getLogger(__name__)
 
 
-class Conversation(Document):
+class Conversation(BaseDocument):
     """Enhanced conversation model with message tracking and metadata."""
 
-    # Unique identifier
-    id: UUID4 = Field(default_factory=uuid.uuid4)
-
-    # Relationship to user
+    # Relationship to user - using proper Link typing
     user: Link[User]
 
     # Basic conversation data
     title: Optional[str] = None
-    tags: List[str] = Field(default_factory=list)
+    # tags removed
 
     # Timestamps
     created_at: datetime = Field(default_factory=datetime.now)
@@ -29,27 +32,49 @@ class Conversation(Document):
     # Token tracking
     token_window: TokenWindowState = Field(default_factory=TokenWindowState)
 
-    # Additional metadata
-    detected_topics: List[str] = Field(
-        default_factory=list
-    )  # Topics detected from messages
-    summary: Optional[str] = None  # AI-generated summary of conversation
+    # Additional metadata removed (detected_topics, summary)
+
+    # Encryption fields
+    encrypted_conversation_key: Optional[str] = None  # AES key encrypted with user's public key
+    key_version: int = Field(default=1)  # For future key rotation support
 
     class Settings:
         name = "conversations"
 
     @classmethod
-    async def create_initial(cls, user_id: str) -> "Conversation":
-        """Create a new conversation."""
-        user = await User.get(user_id)
-        if not user:
-            raise ValueError("User not found")
-
+    async def create_initial(cls, user: User, user_public_key: Optional[str] = None) -> "Conversation":
+        """Create a new conversation with optional key generation."""
         conversation = cls(
             user=user,
             created_at=datetime.now(),
             updated_at=datetime.now(),
         )
+
+        # Generate and encrypt conversation key if public key is provided
+        if user_public_key:
+            try:
+                # Generate a new AES key for the conversation
+                conversation_key = generate_aes_key()
+                
+                # Load the user's public key
+                public_key = load_public_key_from_pem(user_public_key)
+                
+                # Encrypt the conversation key with the user's public key
+                encrypted_key = encrypt_with_rsa_public_key(public_key, conversation_key)
+                
+                # Store the encrypted key
+                conversation.encrypted_conversation_key = base64.b64encode(encrypted_key).decode('utf-8')
+                logger.debug(f"Generated and encrypted conversation key for conversation {conversation.id}")
+            except Exception as e:
+                logger.error(f"Failed to generate/encrypt conversation key for user {user.id}: {e}", exc_info=True)
+                # Raise an HTTP exception instead of passing silently
+                # This ensures the client gets an error response
+                from fastapi import HTTPException, status # Import inside method to avoid circular dependency if needed
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to set up encryption for new conversation: {e}"
+                )
+
         await conversation.save()
         return conversation
 
@@ -57,7 +82,7 @@ class Conversation(Document):
         self,
         content: str,
         parent_message_id: Optional[UUID4] = None,
-    ) -> Message:
+    ) -> "Message":
         """Add a user message to the conversation."""
         # Update conversation timestamp
         self.updated_at = datetime.now()
@@ -67,6 +92,7 @@ class Conversation(Document):
         message = await Message.create_user_message(
             conversation_id=self.id,
             content=content,
+            user=self.user,
             parent_message_id=parent_message_id,
         )
 
@@ -82,13 +108,14 @@ class Conversation(Document):
         model_id: str,
         parent_message_id: UUID4,
         token_count: Optional[int] = None,
-    ) -> Message:
+    ) -> "Message":
         """Add an assistant message to the conversation."""
         # Create the message
         message = await Message.create_assistant_message(
             conversation_id=self.id,
             content=content,
             model_id=model_id,
+            user=self.user,
             parent_message_id=parent_message_id,
             token_count=token_count,
         )
@@ -99,7 +126,7 @@ class Conversation(Document):
 
         return message
 
-    async def get_messages(self) -> List[Message]:
+    async def get_messages(self) -> List["Message"]:
         """Get all messages in the conversation."""
         return (
             await Message.find(Message.conversation_id == self.id)
@@ -124,7 +151,7 @@ class Conversation(Document):
         # Convert to chat message format
         return [message.to_chat_message() for message in messages]
 
-    async def get_message_thread(self, message_id: UUID4) -> List[Message]:
+    async def get_message_thread(self, message_id: UUID4) -> List["Message"]:
         """Get a thread of messages starting from a specific message."""
         # Get the original message
         message = await Message.find_one(
@@ -159,11 +186,8 @@ class Conversation(Document):
             "updated_at": self.updated_at.isoformat(),
             "token_window": {
                 "total_tokens": self.token_window.total_tokens,
-                "input_tokens": self.token_window.input_tokens,
-                "output_tokens": self.token_window.output_tokens,
-                "total_cost": self.token_window.total_cost,
+                "prompt_tokens": self.token_window.prompt_tokens,
+                "completion_tokens": self.token_window.completion_tokens,
             },
-            "tags": self.tags,
-            "detected_topics": self.detected_topics,
-            "summary": self.summary,
+            # Removed tags, detected_topics, summary
         }

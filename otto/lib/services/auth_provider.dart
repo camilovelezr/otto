@@ -1,13 +1,18 @@
 import 'package:flutter/material.dart';
+import 'dart:async';  // Add this for unawaited
 import '../models/user_model.dart';
 import 'auth_service.dart';
 import 'model_service.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import '../config/env_config.dart';
+import 'encryption_service.dart';
 
 class AuthProvider extends ChangeNotifier {
-  final AuthService _authService = AuthService();
-  final ModelService _modelService = ModelService();
-  
-  bool _isLoading = false;
+  final AuthService _authService;
+  final ModelService _modelService;
+  late final EncryptionService _encryptionService;
+  bool _isLoading = true;
   String? _error;
   
   // Getters
@@ -18,19 +23,29 @@ class AuthProvider extends ChangeNotifier {
   
   // Alias for isLoggedIn with clearer semantics
   bool get isAuthenticated => isLoggedIn;
-  
-  // Constructor
-  AuthProvider() {
-    _initialize();
+
+  // Constructor - Dependencies removed
+  AuthProvider({
+    AuthService? authService,
+    ModelService? modelService,
+  }) : _authService = authService ?? AuthService(),
+       _modelService = modelService ?? ModelService() {
+    _encryptionService = EncryptionService();
+    _init();
   }
-  
+
   // Initialize auth state
-  Future<void> _initialize() async {
+  Future<void> _init() async {
     _isLoading = true;
     notifyListeners();
     
     try {
+      await _encryptionService.initializeKeys();
       await _authService.init();
+      if (currentUser != null) {
+        // Ensure we have the server's public key
+        await _encryptionService.fetchAndStoreServerPublicKey(EnvConfig.backendUrl);
+      }
     } catch (e) {
       _setError(e);
     } finally {
@@ -98,21 +113,25 @@ class AuthProvider extends ChangeNotifier {
   // Login with username and password
   Future<bool> login(String username, String password) async {
     _isLoading = true;
-    _error = null;
+    _error = null;  // Clear any previous errors
     notifyListeners();
     
     try {
+      // Initialize encryption and fetch server public key first
+      await _encryptionService.initializeKeys();
+      await _encryptionService.fetchAndStoreServerPublicKey(EnvConfig.backendUrl);
+
       await _authService.login(username, password);
-      _isLoading = false;
-      notifyListeners();
       
       // After successful login, load models
       if (currentUser != null) {
         debugPrint('Login successful, loading models for user: ${currentUser!.id}');
         // Run model loading in the background to not block the UI
-        _loadModelsAfterLogin();
+        unawaited(_loadModelsAfterLogin());  // Use unawaited to not block
       }
-      
+
+      _isLoading = false;
+      notifyListeners();
       return true;
     } catch (e) {
       _isLoading = false;
@@ -129,17 +148,22 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
     
     try {
+      // Initialize encryption and fetch server public key first
+      await _encryptionService.initializeKeys();
+      await _encryptionService.fetchAndStoreServerPublicKey(EnvConfig.backendUrl);
+
       await _authService.register(username, password, displayName);
       _isLoading = false;
       notifyListeners();
-      
+
       // After successful registration, load models
       if (currentUser != null) {
         debugPrint('Registration successful, loading models for user: ${currentUser!.id}');
         // Run model loading in the background to not block the UI
         _loadModelsAfterLogin();
       }
-      
+      // Key fetching logic removed
+
       return true;
     } catch (e) {
       _isLoading = false;
@@ -156,6 +180,7 @@ class AuthProvider extends ChangeNotifier {
     
     try {
       await _authService.logout();
+      // Key clearing logic removed
     } catch (e) {
       _setError(e);
     } finally {
@@ -169,4 +194,4 @@ class AuthProvider extends ChangeNotifier {
     _error = null;
     notifyListeners();
   }
-} 
+}

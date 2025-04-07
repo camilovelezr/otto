@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/chat_message.dart';
 import '../models/llm_model.dart';
+import '../models/conversation_summary.dart'; // Import the new model
 import '../config/env_config.dart';  // Add import for EnvConfig
 import 'chat_service.dart';
 import 'model_service.dart';
@@ -25,7 +26,13 @@ class ChatProvider with ChangeNotifier {
   String? _currentUserId;
   String? _currentUserName;
   static const String _selectedModelKey = 'selected_model';
-  
+
+  // --- New State for Conversation List ---
+  List<ConversationSummary> _conversationList = [];
+  bool _isLoadingConversations = false;
+  Completer<void>? _userIdSetupCompleter; // Completer for setUserId initialization
+  // --- End New State ---
+
   // Token and cost tracking
   int _totalInputTokens = 0;
   int _totalOutputTokens = 0;
@@ -46,9 +53,14 @@ class ChatProvider with ChangeNotifier {
   String? get error => _error;
   String? get conversationId => _currentConversationId;
   String? get currentUserId => _currentUserId; // Add getter
-  String? get currentUserName => _currentUserName; // Add getter
+  String? get currentUserName => _currentUserName;
   String get currentStreamedResponse => _currentStreamedResponse;
-  
+
+  // --- New Getters ---
+  List<ConversationSummary> get conversationList => _conversationList;
+  bool get isLoadingConversations => _isLoadingConversations;
+  // --- End New Getters ---
+
   // Token and cost tracking getters
   int get totalInputTokens => _totalInputTokens;
   int get totalOutputTokens => _totalOutputTokens;
@@ -63,7 +75,8 @@ class ChatProvider with ChangeNotifier {
   // Set error message and notify listeners
   void setError(String errorMessage) {
     _error = errorMessage;
-    _isLoading = false;
+    _isLoading = false; // Also stop general loading on error
+    _isLoadingConversations = false; // Stop conversation loading on error
     notifyListeners();
   }
   
@@ -72,305 +85,272 @@ class ChatProvider with ChangeNotifier {
     _totalInputTokens = 0;
     _totalOutputTokens = 0;
     _totalCost = 0.0;
-    notifyListeners();
+    // No need to notify here, usually called within other methods that notify
   }
   
-  // Initialize chat by loading models and ensuring a conversation exists
+  // Initialize chat provider - primarily loads models now
   Future<void> initialize({bool syncModelsWithBackend = false}) async {
     try {
       _error = null;
-      // First, set loading state
-      _isLoadingModels = true; // Use the dedicated model loading flag
+      _isLoadingModels = true;
       notifyListeners();
       
       debugPrint('Initializing chat provider');
       debugPrint('Using backend URL: ${EnvConfig.backendUrl}');
       
-      // Then perform the actual initialization asynchronously
-      await Future.microtask(() async {
-        // Load models from backend
-        try {
-          debugPrint('Fetching models from backend...');
-          // Always use the /models/list endpoint
-          final models = await _modelService.getModels();
-          
-          if (models.isNotEmpty) {
-            debugPrint('Fetched ${models.length} models from backend');
-            _availableModels = models;
-          } else {
-            debugPrint('No models returned from backend, retrying once...');
-            // Try again once more after a short delay
-            await Future.delayed(Duration(milliseconds: 500));
-            final retryModels = await _modelService.getModels();
-            
-            if (retryModels.isNotEmpty) {
-              debugPrint('Fetched ${retryModels.length} models on retry');
-              _availableModels = retryModels;
-            } else {
-              debugPrint('Still no models after retry');
-            }
-          }
-        } catch (e) {
-          debugPrint('Error fetching models from backend: $e');
-          // Continue with initialization even if fetch fails
-        }
-        
-        // Ensure we have a conversation
-        try {
-          await _ensureConversationExists();
-        } catch (e) {
-          debugPrint('Error ensuring conversation exists: $e');
-          // Continue without conversation if creation fails
-        }
-        
-        _messages = []; // Clear messages for a fresh start
-        
-        // Always make sure to reset loading state regardless of success/failure
-        _isLoadingModels = false; // Use the dedicated flag
-        notifyListeners();
-      });
+      await _loadModelsInternal(); // Load models
+
     } catch (e) {
-      // Make sure loading state is reset in case of any error
-      _isLoadingModels = false; // Use the dedicated flag
-      debugPrint('Error initializing chat: $e');
+      debugPrint('Error initializing chat provider: $e');
       _error = 'Failed to initialize chat: $e';
-      notifyListeners();
-    }
-  }
-  
-  // Clear the current chat and start fresh
-  Future<void> clearChat() async {
-    _messages = [];
-    _error = null; // Explicitly clear any error messages
-    resetTokenAndCostTracking();
-    // Create a new conversation
-    _currentConversationId = null;
-    await _ensureConversationExists();
-    notifyListeners();
-  }
-  
-  // Initialize a new conversation if one doesn't exist
-  Future<void> _ensureConversationExists() async {
-    if (_currentConversationId == null) {
-      try {
-        // Use helper method to ensure valid user ID
-        final userId = _ensureValidUserId();
-        debugPrint('Creating new conversation for user: $userId');
-        
-        // Create a new conversation and wait for the result
-        final conversationId = await _chatService.createConversation(userId);
-        
-        if (conversationId == null || conversationId.isEmpty) {
-          throw Exception('Backend returned empty conversation ID');
-        }
-        
-        _currentConversationId = conversationId;
-        debugPrint('Created new conversation with ID: $_currentConversationId');
-      } catch (e) {
-        debugPrint('Error creating conversation: $e');
-        // Rethrow the exception to be handled by the caller
-        throw Exception('Failed to create conversation: $e');
-      }
-    } else {
-      debugPrint('Using existing conversation: $_currentConversationId');
+    } finally {
+       _isLoadingModels = false; // Ensure loading state is always reset
+       notifyListeners();
     }
   }
 
-  // Fetch conversations for the current user
-  Future<List<dynamic>> fetchConversations() async {
-    if (_currentUserId == null) {
-      throw Exception('No user ID set');
-    }
-    
-    try {
-      return await _chatService.getConversations(_currentUserId!);
-    } catch (e) {
-      debugPrint('Error fetching conversations: $e');
-      _error = 'Failed to load conversations: $e';
-      notifyListeners();
-      return [];
-    }
-  }
-  
-  // Load a specific conversation
-  Future<void> loadConversation(String conversationId) async {
-    _isLoading = true;
-    _error = null;
-    notifyListeners();
-    
-    try {
-      // Get valid user ID
-      final userId = _ensureValidUserId();
-      
-      // Get conversation details
-      final conversation = await _chatService.getConversation(
-        conversationId,
-        userId: userId
-      );
-      _currentConversationId = conversationId;
-      
-      // Get messages separately using the new endpoint
-      _messages = await _chatService.getConversationMessages(
-        conversationId,
-        userId: userId
-      );
-      
-      // If conversation has token tracking data, update our local state
-      if (conversation['token_window'] != null) {
-        final tokenWindow = conversation['token_window'];
-        _totalInputTokens = tokenWindow['input_tokens'] ?? 0;
-        _totalOutputTokens = tokenWindow['output_tokens'] ?? 0;
-        _totalCost = (tokenWindow['total_cost'] ?? 0.0).toDouble();
-      }
-      
-      _isLoading = false;
-      notifyListeners();
-    } catch (e) {
-      _isLoading = false;
-      _error = 'Failed to load conversation: $e';
-      notifyListeners();
-    }
-  }
+  // Internal helper for loading models and applying selection logic
+  Future<void> _loadModelsInternal() async {
+    LLMModel? newlySelectedModel;
+    bool usedFallback = false;
 
-  void _provideFallbackModels() {
-    // Note: As per user instruction, we don't want to create hardcoded models
-    // Instead we'll just log an error and leave the models empty
-    
-    debugPrint('ERROR: Could not load models from server');
-    debugPrint('No fallback models will be used, as per requirement to always use backend models');
-    
-    // Clear any existing models to ensure we're not using outdated data
-    _availableModels = [];
-    
-    // Set error state to inform the user
-    _error = 'Could not connect to model server. Please check your connection and try again.';
-    
-    // Don't set a fallback model - we must get it from the backend
-    _selectedModel = null;
-    
-    // No notifyListeners here - caller will handle notification
-  }
-  
-  // Load available models
-  Future<void> loadModels() async {
-    // Set a flag to track if we got any models
-    bool gotModels = false;
-    
     try {
-      debugPrint('Loading models from backend...');
-      
-      // Try to restore previously selected model from preferences first
+      debugPrint('Loading models internally...');
       final prefs = await SharedPreferences.getInstance();
       final savedModelId = prefs.getString(_selectedModelKey);
       final savedModelJson = prefs.getString('${_selectedModelKey}_json');
-      
-      debugPrint('Saved model ID from preferences: $savedModelId');
-      
-      // Try to get models from the backend using only the /models/list endpoint
-      debugPrint('Fetching models from /models/list endpoint...');
+      debugPrint('Saved model ID from prefs: $savedModelId');
+
+      // Fetch models from backend
       try {
         _availableModels = await _modelService.getModels().timeout(
-          Duration(seconds: 8),
+          const Duration(seconds: 8),
           onTimeout: () {
-            debugPrint('Model fetching timed out after 8 seconds');
+            debugPrint('Model fetching timed out');
             return [];
           }
         );
-        debugPrint('Fetched ${_availableModels.length} models from backend');
+        debugPrint('Fetched ${_availableModels.length} models from backend.');
       } catch (e) {
-        debugPrint('Error fetching models: $e');
-        _availableModels = [];
+        debugPrint('Error fetching models from backend: $e');
+        _availableModels = []; // Ensure list is empty on fetch error
       }
-      
-      // If we got models, find the previously selected one or use the first one
+
       if (_availableModels.isNotEmpty) {
-        gotModels = true;
-        // If we previously had a saved model, try to restore it
+        // 1. Try saved model
         if (savedModelId != null) {
-          // Try to find the previously selected model in the new list
-          final modelIndex = _availableModels.indexWhere(
-            (model) => model.modelId == savedModelId
-          );
-          
-          if (modelIndex >= 0) {
-            _selectedModel = _availableModels[modelIndex];
-            debugPrint('Found saved model in backend models: ${_selectedModel!.displayName}');
+          final savedIndex = _availableModels.indexWhere((m) => m.modelId == savedModelId);
+          if (savedIndex != -1) {
+            newlySelectedModel = _availableModels[savedIndex];
+            debugPrint('Restored saved model: ${newlySelectedModel.displayName}');
           } else {
-            // If we couldn't find the saved model, use the first one from the backend
-            _selectedModel = _availableModels.first;
-            debugPrint('Saved model not found in backend, using first model: ${_selectedModel!.displayName}');
+             debugPrint('Saved model ID "$savedModelId" not found in fetched list.');
+          }
+        }
+
+        // 2. Try Groq fallback (if saved model not found)
+        if (newlySelectedModel == null) {
+          final groqIndex = _availableModels.indexWhere((m) => m.provider.toLowerCase() == 'groq');
+          if (groqIndex != -1) {
+            newlySelectedModel = _availableModels[groqIndex];
+            usedFallback = true;
+            debugPrint('Using Groq fallback model: ${newlySelectedModel.displayName}');
+          } else {
+             debugPrint('No Groq model found in fetched list.');
+          }
+        }
+
+        // 3. Try first available fallback (if saved and Groq not found)
+        if (newlySelectedModel == null) {
+          newlySelectedModel = _availableModels.first;
+          usedFallback = true;
+          debugPrint('Using first available fallback model: ${newlySelectedModel.displayName}');
+        }
+
+      } else {
+        // Fetch failed, try restoring from full JSON cache
+        debugPrint('Backend fetch yielded no models. Trying cache...');
+        if (savedModelJson != null) {
+          try {
+            final modelData = jsonDecode(savedModelJson);
+            newlySelectedModel = LLMModel.fromJson(modelData);
+            _availableModels = [newlySelectedModel]; // Populate available models with the cached one
+            debugPrint('Restored model from JSON cache: ${newlySelectedModel.displayName}');
+          } catch (e) {
+            debugPrint('Error parsing cached model JSON: $e');
+            _availableModels = []; // Ensure list is empty if cache parse fails
           }
         } else {
-          // No saved model, use the first available from the backend
-          _selectedModel = _availableModels.first;
-          debugPrint('No saved model, using first model from backend: ${_selectedModel!.displayName}');
+           debugPrint('No cached model JSON found.');
+           _availableModels = []; // Ensure list is empty
         }
+      }
+
+      // Set the selected model
+      _selectedModel = newlySelectedModel;
+
+      // If we used a fallback (Groq or first), save it as the new default
+      if (usedFallback && _selectedModel != null) {
+        debugPrint('Saving fallback model selection to prefs: ${_selectedModel!.displayName}');
+        await setSelectedModel(_selectedModel!); // Save the new default
+      }
+
+      if (_selectedModel == null) {
+         debugPrint('Could not select any model.');
+         // Error state will be handled by initialize if needed
+      }
+
+    } catch (e) {
+      debugPrint('Error during internal model loading: $e');
+      _error = 'Failed to load models: $e'; // Set error state here
+      _availableModels = []; // Ensure list is empty on error
+      _selectedModel = null; // Ensure no model is selected on error
+    }
+  }
+  
+  // Clear the current chat and start fresh (used by UI action)
+  Future<void> clearChat() async {
+    // Call the new UI-facing method to handle state updates correctly
+    await requestNewConversation();
+  }
+  
+  // Initialize a new conversation if one doesn't exist (internal use)
+  Future<void> _ensureConversationExists() async {
+    if (_currentConversationId == null) {
+      try {
+        debugPrint('Ensuring conversation exists...');
+        final conversationId = await _chatService.createConversation(); // Pass userId REMOVED
+        if (conversationId == null || conversationId.isEmpty) {
+          throw Exception('Backend returned empty conversation ID');
+        }
+        _currentConversationId = conversationId;
+        debugPrint('Ensured conversation exists with ID: $_currentConversationId');
+      } catch (e) {
+        debugPrint('Error ensuring conversation exists: $e');
+        throw Exception('Failed to create conversation: $e'); // Rethrow
+      }
+    } else {
+      debugPrint('Conversation already exists: $_currentConversationId');
+    }
+  }
+
+  // --- Internal Fetch Conversation List ---
+  // Returns the fetched list, or null on error/no user. Does NOT manage state.
+  Future<List<ConversationSummary>?> _fetchConversationListInternal() async {
+    if (_currentUserId == null) {
+      debugPrint('Cannot fetch conversation list: No user ID set');
+      return null;
+    }
+
+    try {
+      final conversationsData = await _chatService.getConversations(_currentUserId!);
+      final fetchedList = conversationsData
+          .map((data) => ConversationSummary.fromJson(data as Map<String, dynamic>))
+          .toList();
+      fetchedList.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      debugPrint('Fetched and parsed ${fetchedList.length} conversation summaries.');
+      return fetchedList;
+    } catch (e) {
+      debugPrint('Error fetching conversation list internally: $e');
+      return null; // Return null on error, caller (setUserId) will handle
+    }
+  }
+  // --- End Internal Fetch Conversation List ---
+
+
+  // Fetch conversations for the current user (public, manages state)
+  Future<void> fetchConversationList() async {
+     if (_currentUserId == null) {
+      debugPrint('Cannot fetch conversation list: No user ID set');
+      _conversationList = [];
+      _error = 'User not logged in.';
+      notifyListeners();
+      return;
+    }
+    _isLoadingConversations = true;
+    _error = null; // Clear previous errors
+    notifyListeners(); // Notify UI that list is loading
+
+    ConversationSummary? currentPlaceholder;
+    // Find the current placeholder *before* fetching
+    final currentConvIndex = _conversationList.indexWhere((c) => c.id == _currentConversationId);
+    if (currentConvIndex != -1 && _conversationList[currentConvIndex].title == "New Conversation") {
+        currentPlaceholder = _conversationList[currentConvIndex];
+    }
+
+    try {
+      final fetchedList = await _fetchConversationListInternal(); // Fetch data
+
+      if (fetchedList != null) {
+         // Start with the fetched list
+         _conversationList = fetchedList;
+         // If the current conversation (placeholder) wasn't in the fetched list, add it back
+         if (currentPlaceholder != null && !_conversationList.any((c) => c.id == currentPlaceholder!.id)) {
+            _conversationList.insert(0, currentPlaceholder);
+            _conversationList.sort((a, b) => b.updatedAt.compareTo(a.updatedAt)); // Re-sort
+         }
+         _error = null; // Clear error on successful fetch
       } else {
-        // No models returned, try one more time after a short delay
-        debugPrint('No models returned, retrying fetch from /models/list endpoint...');
-        
-        await Future.delayed(Duration(milliseconds: 500));
-        
-        try {
-          final modelsList = await _modelService.getModels().timeout(Duration(seconds: 5), onTimeout: () {
-            debugPrint('Model fetch timed out after 5 seconds');
-            return [];
-          });
-          
-          if (modelsList.isNotEmpty) {
-            gotModels = true;
-            _availableModels = modelsList;
-            debugPrint('Successfully fetched ${modelsList.length} models on retry');
-            
-            // Use the first model from fetched models
-            _selectedModel = _availableModels.first;
-            debugPrint('Using model from backend: ${_selectedModel!.displayName}');
-          } else {
-            // Try to use saved model from preferences as a last resort
-            if (savedModelJson != null) {
-              try {
-                final modelData = jsonDecode(savedModelJson);
-                _selectedModel = LLMModel.fromJson(modelData);
-                _availableModels = [_selectedModel!];
-                gotModels = true;
-                debugPrint('Using cached model from preferences: ${_selectedModel!.displayName}');
-              } catch (e) {
-                debugPrint('Error parsing saved model JSON: $e');
-              }
-            }
-            
-            if (!gotModels) {
-              debugPrint('No models available from the backend - cannot continue');
-              _error = 'Could not load models from backend. Please check your connection and try again.';
-            }
-          }
-        } catch (e) {
-          debugPrint('Error fetching models on retry: $e');
+        _error = 'Failed to load conversation list.';
+        // Don't clear the list if fetch fails but we had a placeholder
+        if (currentPlaceholder == null) {
+           _conversationList = []; 
+        } else {
+           // Keep only the placeholder if fetch failed
+           _conversationList = [currentPlaceholder];
         }
       }
     } catch (e) {
-      debugPrint('Error loading models from backend: $e');
-      _error = 'Error loading models: $e';
+       debugPrint('Error in public fetchConversationList: $e');
+       _error = 'Failed to load conversation list: $e';
+       // Keep placeholder on error if it exists
+       _conversationList = currentPlaceholder != null ? [currentPlaceholder] : [];
+    } finally {
+      _isLoadingConversations = false;
+      notifyListeners(); // Notify UI about the potentially merged list or error state
     }
-    
-    // If we couldn't get any models, create a fallback model so the app doesn't hang
-    if (!gotModels && _selectedModel == null) {
-      debugPrint('No models available from the backend - cannot continue');
-      _error = 'Could not load models from backend. Please check your connection and try again.';
-      
-      // IMPORTANT: As per requirement, we do NOT create a fallback model
-      // All models must come from MongoDB backend
-      debugPrint('No fallback models will be used, as per requirement to always use backend models');
-      
-      // Clear any existing models to ensure we're not using outdated data
-      _availableModels = [];
-      
-      // Don't set a fallback model - we must get it from the backend
-      _selectedModel = null;
-    }
-    
-    // No notifyListeners here - caller will handle notification
   }
+
+
+  // Load a specific conversation
+  Future<void> loadConversation(String conversationId) async {
+    _isLoading = true; // Loading messages state
+    _error = null;
+    _messages.clear(); // Clear messages immediately
+    notifyListeners(); // Notify UI about the clear
+    
+    try {
+      final userId = _ensureValidUserId();
+      
+      // Get conversation details (optional, maybe just get messages)
+      // final conversation = await _chatService.getConversation(conversationId, userId: userId);
+
+      // Update the current conversation ID *before* fetching messages
+      _currentConversationId = conversationId;
+      debugPrint('Loading conversation: $_currentConversationId');
+
+      // Reset token/cost tracking for the newly loaded conversation
+      resetTokenAndCostTracking();
+
+      // Get messages for the conversation
+      _messages = await _chatService.getConversationMessages(conversationId, userId: userId);
+      
+      // TODO: Optionally update token/cost from conversation details if needed later
+      // if (conversation['token_window'] != null) { ... }
+      
+    } catch (e) {
+      debugPrint('Error loading conversation $conversationId: $e');
+      _error = 'Failed to load conversation: $e';
+      _messages = []; // Ensure messages are cleared on error too
+      _currentConversationId = null; // Clear current ID on error
+    } finally {
+       _isLoading = false;
+       notifyListeners(); // Update UI with messages/error/loading state
+    }
+  }
+
+  // --- Model Selection Logic ---
+  // Duplicated _loadModelsInternal removed, keeping the one called by initialize
 
   Future<void> setSelectedModel(LLMModel model) async {
     _selectedModel = model;
@@ -388,6 +368,7 @@ class ChatProvider with ChangeNotifier {
       debugPrint('Error saving model preference: $e');
     }
   }
+  // --- End Model Selection ---
 
   // Get model metadata for token tracking
   Future<LLMModel?> _getModelMetadata(String modelId) async {
@@ -406,16 +387,19 @@ class ChatProvider with ChangeNotifier {
   }
   
   // Estimate token count using a simple approximation
-  int _estimateTokenCount(String text) {
+  int _estimateTokenCount(String? text) { // Accept nullable string
+    if (text == null || text.isEmpty) {
+      return 0;
+    }
     // Simple approximation: about 4 characters per token for English
     return (text.length / 4).ceil();
   }
-  
+
   // Update token usage without requiring a model
   void _updateTokenUsageWithFallback(ChatMessage message, {bool isInput = true}) {
-    // Estimate token count if not provided
+    // Estimate token count if not provided, handle null content
     int tokens = message.tokenCount ?? _estimateTokenCount(message.content);
-    
+
     // Update token counts
     if (isInput) {
       _totalInputTokens += tokens;
@@ -434,12 +418,13 @@ class ChatProvider with ChangeNotifier {
       _totalCost += cost;
     }
     
-    notifyListeners();
+    // No notifyListeners here, caller should notify if needed
   }
 
   // Original _updateTokenUsage method now uses the new fallback method
   void _updateTokenUsage(ChatMessage message, {bool isInput = true}) {
     _updateTokenUsageWithFallback(message, isInput: isInput);
+    notifyListeners(); // Notify after updating usage
   }
 
   Future<void> addUserMessage(String content) async {
@@ -457,10 +442,7 @@ class ChatProvider with ChangeNotifier {
     
     // Add to local state
     _messages.add(message);
-    notifyListeners();
-    
-    // Update token usage
-    _updateTokenUsage(message, isInput: true);
+    _updateTokenUsage(message, isInput: true); // Update usage and notify
     
     debugPrint('Current message count before sending to API: ${_messages.length}');
     
@@ -473,107 +455,63 @@ class ChatProvider with ChangeNotifier {
     double? temperature,
     int? maxTokens,
   }) async {
+    // Ensure user ID setup is complete before sending messages
+    await _userIdSetupCompleter?.future; 
+
     try {
-      // Clear any previous error messages when sending a new message
-      _error = null;
+      _error = null; // Clear previous errors at the start
       
-      // Validate that we have everything needed to send a message
       if (content.trim().isEmpty) {
         debugPrint('Cannot send empty message');
         return;
       }
       
       if (_selectedModel == null) {
-        debugPrint('No model selected');
-        _error = 'Please select a model before sending a message';
-        notifyListeners();
+        setError('Please select a model before sending a message');
         return;
       }
       
-      // Check if we have an active conversation ID
       await _ensureConversationExists();
       if (_currentConversationId == null) {
-        debugPrint('Failed to get a valid conversation ID');
-        _error = 'Could not create a conversation. Please try again.';
-        notifyListeners();
+        setError('Could not create or find a conversation. Please try again.');
         return;
       }
       
-      // Get a copy of message history for the API request
       final apiMessageHistory = List<ChatMessage>.from(_messages);
       
-      // Log the message count and roles
-      debugPrint('Message count being sent to API: ${apiMessageHistory.length}');
-      for (int i = 0; i < apiMessageHistory.length; i++) {
-        final msg = apiMessageHistory[i];
-        debugPrint('Message $i - Role: ${msg.role}, Content: "${msg.content.substring(0, min(20, msg.content.length))}..."');
-      }
-      
-      // Validate we have at least one message to send
       if (apiMessageHistory.isEmpty) {
-        debugPrint('ERROR: No messages to send to API');
-        _error = 'No messages to send. Please try again.';
-        notifyListeners();
+        setError('No messages to send. Please type a message.');
         return;
       }
       
-      // For UI purposes, add a temporary message that won't be sent to the API
       final tempAssistantMessage = ChatMessage(
         role: 'assistant',
-        content: '',
+        content: '', // Start empty
         model: _selectedModel,
       );
       _messages.add(tempAssistantMessage);
       
-      // Important: Reset the streamed response buffer for the new message
-      _currentStreamedResponse = '';
+      _currentStreamedResponse = ''; 
+      _isLoading = true; 
+      notifyListeners(); // Show placeholder and loading state
       
-      notifyListeners(); // Notify UI to show the placeholder
-      
-      // Debug: print messages state for debugging (just roles and shortened content)
-      debugPrint('Sending messages to API:');
-      for (final msg in apiMessageHistory) {
-        final contentPreview = msg.content.length > 20 
-            ? '${msg.content.substring(0, 20)}...' 
-            : msg.content;
-        debugPrint('  ${msg.role}: $contentPreview');
-      }
-      
-      // Make sure any previous stream subscription is closed
+      debugPrint('Sending messages to API (Count: ${apiMessageHistory.length}):');
+      // ... (optional detailed logging of messages) ...
+
       if (_streamSubscription != null) {
         await _streamSubscription!.cancel();
         _streamSubscription = null;
       }
       
-      // Create a stream controller to handle the streaming response
       _streamController = StreamController<String>();
       
       try {
-        // Use stream to get incremental responses from the AI
-        debugPrint('Starting stream chat request with conversation ID: $_currentConversationId');
-        if (maxTokens != null) {
-          debugPrint('Using max_input_tokens: $maxTokens');
-        }
-        
-        // Ensure we use a proper model identifier, not the hash
-        // Get the display name or a fallback model name (like 'gpt-3.5-turbo')
-        final String modelForApi = _selectedModel!.displayName.isNotEmpty 
-            ? _selectedModel!.displayName 
-            : _selectedModel!.modelId.contains('-') 
-                ? _selectedModel!.modelId 
-                : 'gpt-3.5-turbo'; // Fallback to a safe default
-        
+        final String modelForApi = _selectedModel!.modelId; // Use modelId directly
         debugPrint('Using model for API request: $modelForApi');
-        
-        // Print selectedModel details for debugging
-        debugPrint('Selected model details:');
-        debugPrint('  modelId: ${_selectedModel!.modelId}');
-        debugPrint('  displayName: ${_selectedModel!.displayName}');
-        debugPrint('  provider: ${_selectedModel!.provider}');
         
         final stream = _chatService.streamChat(
           modelForApi,
-          apiMessageHistory, // Use the list without the empty assistant message
+          apiMessageHistory,
           userId: _ensureValidUserId(),
           conversationId: _currentConversationId,
           temperature: temperature,
@@ -582,116 +520,88 @@ class ChatProvider with ChangeNotifier {
         
         _streamSubscription = stream.listen(
           (chunk) {
-            // Special handling for error messages marked with *ERROR_MESSAGE* prefix
             if (chunk.startsWith("*ERROR_MESSAGE*")) {
-              // Extract the actual error message
               final errorMessage = chunk.substring("*ERROR_MESSAGE*".length);
-              
-              // Set the error state but don't add it to the message history
               setError(errorMessage);
-              
-              // Remove the last (empty) assistant message since we got an error
-              if (_messages.isNotEmpty && _messages.last.role == 'assistant' && _messages.last.content.isEmpty) {
+              if (_messages.isNotEmpty && _messages.last.role == 'assistant' && (_messages.last.content == null || _messages.last.content!.isEmpty)) {
                 _messages.removeLast();
-                notifyListeners();
+                // setError already notifies
               }
-              
-              // Instead of break, just return early from this callback
+              _streamSubscription?.cancel(); // Stop listening on error
               return;
             }
-            
-            // Process normal (non-error) chunks
-            _currentStreamedResponse += chunk;
-            _streamController?.add(chunk);
-            
-            // Update last message content in state
+
+            _currentStreamedResponse += chunk; 
+
             if (_messages.isNotEmpty && _messages.last.role == 'assistant') {
-              // Instead of modifying the existing message's content, create a new message with the streamed content
-              _messages[_messages.length - 1] = ChatMessage(
-                id: _messages.last.id,
-                role: 'assistant',
-                content: _currentStreamedResponse, // Use only the streamed content, not existing content
-                model: _selectedModel,
-                createdAt: _messages.last.createdAt,
-                timestamp: _messages.last.timestamp, // Preserve the timestamp
-              );
-              notifyListeners();
+               String currentContent = _messages.last.content ?? '';
+               _messages[_messages.length - 1] = _messages.last.copyWith(
+                 content: currentContent + chunk,
+               );
+               notifyListeners();
+            } else {
+               debugPrint("Warning: Stream chunk received but no assistant placeholder message found.");
             }
+
+            _streamController?.add(chunk);
           },
           onDone: () {
-            // Update token usage for the assistant response if we have messages
-            if (_messages.isNotEmpty) {
-              _updateTokenUsage(_messages.last, isInput: false);
-            }
-            
-            // Check if we have any content in the last message
-            if (_currentStreamedResponse.isEmpty) {
-              // If we have no content, we might have had a stream error. Log it.
-              debugPrint('Stream completed with empty response. This might indicate an error.');
+            debugPrint('onDone: Entered. Accumulated response length: ${_currentStreamedResponse.length}');
+            if (_messages.isNotEmpty && _messages.last.role == 'assistant') {
+               _finalizeAssistantMessage(_currentStreamedResponse); // Finalize and notify
             } else {
-              // If we have content, consider it a success even if there was an error
-              debugPrint('Stream completed with ${_currentStreamedResponse.length} characters.');
-              
-              // Set the final message content when streaming is done
-              if (_messages.isNotEmpty && _messages.last.role == 'assistant') {
-                // Create a new message with the final content
-                _messages[_messages.length - 1] = ChatMessage(
-                  id: _messages.last.id,
-                  role: 'assistant',
-                  content: _currentStreamedResponse,
-                  model: _selectedModel,
-                  createdAt: _messages.last.createdAt,
-                  timestamp: _messages.last.timestamp,
-                );
+               debugPrint('onDone: Condition NOT met. Last message role might not be assistant or list empty.');
+               _isLoading = false;
+               notifyListeners();
+            }
+
+            if (_currentStreamedResponse.isEmpty) {
+              debugPrint('Stream completed with empty response. Removing placeholder.');
+              if (_messages.isNotEmpty && _messages.last.role == 'assistant' && (_messages.last.content == null || _messages.last.content!.isEmpty)) {
+                 _messages.removeLast();
+                 // No extra notify needed, _finalizeAssistantMessage handles it or the error case does
               }
-              
-              // Clear any error that might have been set
-              _error = null;
+            } else {
+              debugPrint('Stream completed with content.');
+              // Error state is handled within _finalizeAssistantMessage or onError
             }
-            
-            // Notify UI of completion
-            _isLoading = false;
-            notifyListeners();
-            
-            // Close the stream controller
-            if (_streamController != null && !_streamController!.isClosed) {
-              _streamController!.close();
-            }
-            
-            debugPrint('Stream completed');
-            if (_messages.isNotEmpty) {
-              debugPrint('Final message content length: ${_messages.last.content.length}');
-            }
+
+            _streamController?.close();
+            _streamSubscription = null; // Clear subscription
+            debugPrint('Stream completed and resources cleaned up.');
           },
           onError: (e) {
             debugPrint('Stream error: $e');
-            
-            // Only set error state if we don't have any content in the last message
             if (_currentStreamedResponse.isEmpty) {
               setError('Error during streaming: $e');
             } else {
-              // If we have partial content, just log the error but don't show it to the user
-              debugPrint('Stream error occurred, but we have partial content (${_currentStreamedResponse.length} chars). Not showing error to user.');
-              // Clear any error state
-              _error = null;
-              _isLoading = false;
-              notifyListeners();
+              debugPrint('Stream error occurred, but we have partial content. Finalizing.');
+              _finalizeAssistantMessage(_currentStreamedResponse); // Finalize with partial content
             }
-            
-            if (_streamController != null && !_streamController!.isClosed) {
-              _streamController!.addError(e);
-              _streamController!.close();
-            }
+            _streamController?.close();
+             _streamSubscription = null; // Clear subscription
           },
           cancelOnError: true,
         );
       } catch (e) {
         debugPrint('Error setting up stream: $e');
         setError('Error setting up message stream: $e');
+        // Clean up placeholder if stream setup fails
+        if (_messages.isNotEmpty && _messages.last.role == 'assistant') {
+           _messages.removeLast();
+        }
+        _isLoading = false;
+        notifyListeners();
       }
     } catch (e) {
       debugPrint('Error in sendMessage: $e');
       setError('Error sending message: $e');
+       // Clean up placeholder if outer try fails
+        if (_messages.isNotEmpty && _messages.last.role == 'assistant') {
+           _messages.removeLast();
+        }
+       _isLoading = false;
+       notifyListeners();
     }
   }
   
@@ -699,7 +609,6 @@ class ChatProvider with ChangeNotifier {
   Future<void> _updateConversationTitle({bool forceUpdate = false}) async {
     if (_currentConversationId == null) return;
     
-    // Get valid user ID
     final userId = _ensureValidUserId();
     
     try {
@@ -710,17 +619,15 @@ class ChatProvider with ChangeNotifier {
       );
     } catch (e) {
       debugPrint('Error updating conversation title: $e');
-      // Not critical, so we don't set an error state
     }
   }
   
-  // Refresh models from the server (renamed from syncModels)
+  // Refresh models from the server
   Future<void> refreshModels() async {
     try {
       _isLoadingModels = true;
       notifyListeners();
       
-      // Call the syncModels endpoint instead of just getModels
       debugPrint('Calling syncModels from ChatProvider for user: $_currentUserId, username: $_currentUserName');
       final models = await _modelService.syncModels(
         userId: _currentUserId, 
@@ -742,56 +649,136 @@ class ChatProvider with ChangeNotifier {
     }
   }
   
-  // Helper method to update the selected model after refresh (renamed from _updateSelectedModelAfterSync)
+  // Helper method to update the selected model after refresh
   void _updateSelectedModelAfterRefresh() {
-    // Reselect current model if we had one previously
     if (_selectedModel != null) {
       final String currentModelId = _selectedModel!.modelId;
-      
-      // Try to find the same model in the updated list
       final modelIndex = _availableModels.indexWhere(
         (model) => model.modelId == currentModelId
       );
       
       if (modelIndex >= 0) {
-        // Found the same model in the updated list
-        setSelectedModel(_availableModels[modelIndex]);
+        // Found the same model in the updated list, no need to call setSelectedModel again unless details changed
+        _selectedModel = _availableModels[modelIndex]; 
       } else if (_availableModels.isNotEmpty) {
         // Couldn't find same model, use the first available
-        setSelectedModel(_availableModels.first);
+        setSelectedModel(_availableModels.first); // Save the new default
+      } else {
+         _selectedModel = null; // No models available
       }
     } else if (_availableModels.isNotEmpty) {
       // No previously selected model, use the first one
-      setSelectedModel(_availableModels.first);
+      setSelectedModel(_availableModels.first); // Save the new default
+    } else {
+       _selectedModel = null; // No models available
     }
+    notifyListeners(); // Notify about potential model change
   }
   
-  // Set user information
-  void setUserId(String userId, {String? username}) {
+  // Set user information and initialize conversation list
+  Future<void> setUserId(String userId, {String? username}) async {
     _currentUserId = userId;
     _currentUserName = username ?? userId;
     
-    // Update chat service with username for authentication
     _chatService.setCurrentUsername(_currentUserName!);
     
     debugPrint('Set user ID: $userId and username: ${username ?? userId}');
     
-    // Reset conversation ID so a new one will be created
+    // Reset state BEFORE async calls
     _currentConversationId = null;
-  }
-  
-  // Create a new conversation
-  Future<void> createNewConversation() async {
     _messages = [];
-    _currentConversationId = null;
-    notifyListeners();
-    
-    // A new conversation will be created when the first message is sent
+    resetTokenAndCostTracking(); 
+    _conversationList = []; // Clear list immediately
+    _isLoadingConversations = true; // Set loading true
+    _error = null; // Clear previous errors
+    _userIdSetupCompleter = Completer<void>();
+    notifyListeners(); // Notify UI about reset and loading state
+
+    List<ConversationSummary>? fetchedList;
+    ConversationSummary? conversationToUse;
+
+    try {
+      // 1. Fetch existing conversations FIRST
+      fetchedList = await _fetchConversationListInternal(); 
+
+      // 2. Check if the most recent conversation is empty (using title)
+      if (fetchedList != null && fetchedList.isNotEmpty && fetchedList.first.title == "New Conversation") {
+         // 3a. Reuse the existing empty conversation
+         conversationToUse = fetchedList.first;
+         _currentConversationId = conversationToUse.id;
+         _messages = []; // Ensure messages are clear for reused empty convo
+         resetTokenAndCostTracking(); 
+         debugPrint('[ChatProvider setUserId] Reusing existing empty conversation: $_currentConversationId');
+         // No need to call _createBackendConversation
+      } else {
+         // 3b. Create a new conversation if no suitable one exists
+         debugPrint('[ChatProvider setUserId] No suitable empty conversation found, creating new one...');
+         conversationToUse = await _createBackendConversation(); // Creates, sets _currentConversationId, clears messages
+         if (conversationToUse == null) {
+            throw Exception("Failed to create initial conversation.");
+         }
+         debugPrint('[ChatProvider setUserId] Created new conversation: $_currentConversationId');
+      }
+
+      // 4. Populate the conversation list for the UI
+      // Ensure the conversation being used is at the top, followed by others.
+      _conversationList = [
+        if (conversationToUse != null) conversationToUse, // Add the active one (reused or new)
+        ...?fetchedList?.where((c) => c.id != conversationToUse?.id), // Add others from fetched list, excluding the one we're using
+      ];
+      // Sort again to be sure, especially if fetchedList was null or empty initially
+      _conversationList.sort((a, b) => b.updatedAt.compareTo(a.updatedAt)); 
+
+      _error = null; // Clear error on success
+
+    } catch (e) {
+       debugPrint('[ChatProvider setUserId] Error during conversation setup: $e');
+       _error = 'Failed to initialize conversations.';
+       _conversationList = []; // Clear list on error
+       _currentConversationId = null;
+       _messages = [];
+       resetTokenAndCostTracking();
+    } finally {
+      _isLoadingConversations = false; 
+      notifyListeners(); // Notify UI with the final list and state
+      _userIdSetupCompleter?.complete(); 
+    }
+  }
+
+  // New method for UI button press: Creates backend conversation AND updates UI state
+  Future<void> requestNewConversation() async {
+    final placeholder = await _createBackendConversation(); // Create backend conversation & get placeholder
+    if (placeholder != null) {
+      // Clear local messages and costs for the new conversation
+      _messages.clear();
+      resetTokenAndCostTracking();
+      // Prepend placeholder to the list and notify UI
+      _conversationList.removeWhere((c) => c.id == placeholder.id); // Remove potential duplicate if backend was fast
+      _conversationList.insert(0, placeholder);
+      _conversationList.sort((a, b) => b.updatedAt.compareTo(a.updatedAt)); // Ensure sort order
+      // _currentConversationId is already set by _createBackendConversation
+      notifyListeners(); // Update list UI and selection
+    }
+    // If _createBackendConversation failed, error state is already set and notified
+  }
+
+  // Create a new conversation (UI Action) - Deprecated, use requestNewConversation
+  Future<void> createNewConversation() async {
+     final placeholder = await _createBackendConversation(); // Create backend conversation & get placeholder
+     // Prepend placeholder and notify UI
+     if (placeholder != null) {
+        _conversationList.removeWhere((c) => c.id == placeholder.id); // Remove potential duplicate
+        _conversationList.insert(0, placeholder);
+        notifyListeners(); // Update list UI
+     }
+     // If startNewConversation failed, error state is already set and notified
   }
 
   @override
   void dispose() {
     _chatService.dispose();
+    _streamController?.close();
+    _streamSubscription?.cancel();
     super.dispose();
   }
 
@@ -799,61 +786,71 @@ class ChatProvider with ChangeNotifier {
   String _ensureValidUserId() {
     if (_currentUserId == null || _currentUserId!.isEmpty) {
       debugPrint('Warning: No user ID set, using generated ObjectId');
-      _currentUserId = defaultObjectId;
+      // This should ideally not happen if login flow is correct
+      // Consider throwing an error or using a default/guest ID
+      return 'DEFAULT_GUEST_ID'; // Example fallback
     }
     return _currentUserId!;
   }
 
   // Helper method to finalize an assistant message after streaming completes
   void _finalizeAssistantMessage(String content) {
-    // Only proceed if there's actual content
+    debugPrint('_finalizeAssistantMessage entered. Current message count: ${_messages.length}');
+
     if (content.isEmpty) {
-      debugPrint('Warning: Attempted to finalize an empty assistant message');
+      debugPrint('_finalizeAssistantMessage: Content is empty, removing placeholder.');
+       if (_messages.isNotEmpty && _messages.last.role == 'assistant' && (_messages.last.content == null || _messages.last.content!.isEmpty)) {
+          _messages.removeLast();
+       }
+       // Set loading false and notify AFTER potentially removing message
+       _isLoading = false;
+       _currentStreamedResponse = '';
+       notifyListeners(); 
       return;
     }
     
-    // Find the last assistant message
     final lastIndex = _messages.length - 1;
     if (lastIndex >= 0 && _messages[lastIndex].role == 'assistant') {
-      // Create the final message
       final finalMessage = ChatMessage(
-        id: _messages[lastIndex].id,
+        id: _messages[lastIndex].id, // Keep original ID if available
         role: 'assistant',
         content: content,
         model: _selectedModel,
-        createdAt: DateTime.now(),  // Update with final timestamp
-        timestamp: _messages[lastIndex].timestamp,
+        createdAt: DateTime.now(),
+        timestamp: _messages[lastIndex].timestamp, // Keep original timestamp
       );
       
-      // Replace the temporary message
       _messages[lastIndex] = finalMessage;
       
-      // Track token usage
-      _updateTokenUsageWithFallback(finalMessage, isInput: false);
-      
-      // Update conversation title if needed
-      if (_messages.length >= 3 && _currentConversationId != null) {
-        _updateConversationTitle();
+      _updateTokenUsageWithFallback(finalMessage, isInput: false); // Update usage (doesn't notify)
+
+      // --- Trigger Summarization Logic ---
+      debugPrint('Finalize Assistant: Message count = ${_messages.length}, Current Conv ID = $_currentConversationId');
+      if (_messages.length == 4 && _currentConversationId != null) {
+        debugPrint('Finalize Assistant: Checking condition for summarization trigger.');
+        // Directly call _triggerSummarization, which now awaits the completer internally
+        _triggerSummarization(); 
+      } else {
+         debugPrint('Finalize Assistant: Conditions for summarization not met (message count: ${_messages.length}, convId: $_currentConversationId).');
       }
+      // --- End Trigger Summarization ---
     }
-    
-    // Clear loading state and current streamed response
+
+    // Set loading false and notify AFTER all updates are done
     _isLoading = false;
     _currentStreamedResponse = '';
-    notifyListeners();
+    notifyListeners(); 
   }
 
-  // Explicitly create a new conversation before sending any messages
-  // This can be called when initializing the chat screen to avoid race conditions
+  // Explicitly prepare a conversation (e.g., called by ChatScreen initState)
   Future<bool> prepareConversation() async {
     try {
-      debugPrint('Explicitly preparing conversation before sending messages');
-      await _ensureConversationExists();
+      debugPrint('Explicitly preparing conversation...');
+      await _ensureConversationExists(); // Make sure we have an ID
       
       if (_currentConversationId == null || _currentConversationId!.isEmpty) {
-        debugPrint('ERROR: Failed to create conversation during preparation');
-        _error = 'Failed to prepare conversation. Please try again.';
-        notifyListeners();
+        debugPrint('ERROR: Failed to create/ensure conversation during preparation');
+        setError('Failed to prepare conversation. Please try again.');
         return false;
       }
       
@@ -861,9 +858,147 @@ class ChatProvider with ChangeNotifier {
       return true;
     } catch (e) {
       debugPrint('Error preparing conversation: $e');
-      _error = 'Failed to prepare conversation: $e';
-      notifyListeners();
+      setError('Failed to prepare conversation: $e');
       return false;
     }
   }
+
+  // Creates a new backend conversation, sets it as current, clears messages,
+  // and returns a placeholder ConversationSummary. Does NOT modify _conversationList directly.
+  Future<ConversationSummary?> _createBackendConversation() async {
+    ConversationSummary? placeholderSummary;
+    // Set loading specific to conversation creation/switching
+    // _isLoading = true; // Loading state handled by caller (setUserId or requestNewConversation)
+    // notifyListeners(); // Notification handled by caller
+
+    try {
+      debugPrint('Creating backend conversation...'); // Updated log message
+      final conversationId = await _chatService.createConversation();
+      if (conversationId == null || conversationId.isEmpty) {
+         throw Exception("Failed to create conversation on backend.");
+      }
+      _currentConversationId = conversationId;
+      _messages.clear(); // Clear messages for the new conversation
+      resetTokenAndCostTracking(); // Reset costs for new conversation
+
+      placeholderSummary = ConversationSummary(
+        id: conversationId,
+        title: "New Conversation", // Placeholder title
+        updatedAt: DateTime.now(),
+      );
+      debugPrint('Backend conversation created with ID: $conversationId'); // Updated log message
+      
+    } catch (e) {
+      debugPrint('Error creating backend conversation: $e'); // Updated log message
+      setError('Failed to create backend conversation: $e'); // Use setError to notify
+      return null; // Return null on error
+    } finally {
+       // _isLoading = false; // Loading state handled by caller
+       // Do not notify here, let the caller handle final notification
+    }
+    return placeholderSummary; // Return the placeholder
+  }
+
+  // --- New Helper Method: Trigger Summarization ---
+  Future<void> _triggerSummarization() async {
+    // Await completion of setUserId before proceeding
+    await _userIdSetupCompleter?.future; 
+    
+    debugPrint('_triggerSummarization called.');
+    if (_currentConversationId == null || _messages.length < 4) {
+      debugPrint('_triggerSummarization: Conditions not met (ConvID: $_currentConversationId, Msg Count: ${_messages.length}). Bailing out.');
+      return;
+    }
+
+    final messagesToSummarize = _messages.sublist(0, 4);
+
+    debugPrint('Triggering summarization for conversation $_currentConversationId');
+    try {
+      final generatedTitle = await _chatService.summarizeConversation(
+        _currentConversationId!,
+        messagesToSummarize,
+      );
+
+      if (generatedTitle != null && generatedTitle.isNotEmpty) {
+        final index = _conversationList.indexWhere((c) => c.id == _currentConversationId);
+        if (index != -1) {
+          _conversationList[index] = _conversationList[index].copyWith(title: generatedTitle);
+           _conversationList.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+          notifyListeners(); 
+          debugPrint('Conversation list updated with new title: $generatedTitle');
+        } else {
+           debugPrint('Summarization triggered, but conversation ID $_currentConversationId not found in list after title generation.');
+           // If the placeholder was somehow missed, add it now with the title
+           _conversationList.insert(0, ConversationSummary(id: _currentConversationId!, title: generatedTitle, updatedAt: DateTime.now()));
+           _conversationList.sort((a, b) => b.updatedAt.compareTo(a.updatedAt)); // Re-sort after insert
+           notifyListeners();
+        }
+      }
+    } catch (e) {
+      debugPrint('Error triggering summarization: $e');
+      setError('Failed to generate conversation title: $e');
+    }
+  }
+  // --- End New Helper Method ---
+
+  // --- New Method: Rename Conversation ---
+  Future<void> renameConversation(String conversationId, String newTitle) async {
+    final index = _conversationList.indexWhere((c) => c.id == conversationId);
+    if (index == -1) {
+      debugPrint('Cannot rename: Conversation $conversationId not found in local list.');
+      throw Exception('Conversation not found');
+    }
+
+    final oldTitle = _conversationList[index].title;
+
+    _conversationList[index] = _conversationList[index].copyWith(title: newTitle);
+    notifyListeners();
+
+    try {
+      await _chatService.renameConversation(conversationId, newTitle);
+      debugPrint('Successfully renamed conversation $conversationId to "$newTitle"');
+    } catch (e) {
+      _conversationList[index] = _conversationList[index].copyWith(title: oldTitle);
+      notifyListeners();
+      debugPrint('Error renaming conversation $conversationId: $e');
+      throw Exception('Failed to rename conversation: $e');
+    }
+  }
+  // --- End New Method ---
+
+  // --- New Method: Delete Conversation ---
+  Future<void> deleteConversation(String conversationId) async {
+    final index = _conversationList.indexWhere((c) => c.id == conversationId);
+    if (index == -1) {
+      debugPrint('Cannot delete: Conversation $conversationId not found in local list.');
+      throw Exception('Conversation not found');
+    }
+    final deletedSummary = _conversationList[index];
+
+    _conversationList.removeAt(index);
+    bool wasCurrentConversation = _currentConversationId == conversationId;
+    notifyListeners();
+
+    try {
+      final userId = _ensureValidUserId();
+      await _chatService.deleteConversation(conversationId, userId: userId);
+      debugPrint('Successfully deleted conversation $conversationId for user $userId');
+
+      if (wasCurrentConversation) {
+        _currentConversationId = null; 
+        if (_conversationList.isNotEmpty) {
+          await loadConversation(_conversationList.first.id);
+        } else {
+          // If no conversations left, start a new one and update list
+          await setUserId(_currentUserId!, username: _currentUserName); // Re-run setUserId to start fresh
+        }
+      }
+    } catch (e) {
+      _conversationList.insert(index, deletedSummary); // Re-insert on error
+      notifyListeners();
+      debugPrint('Error deleting conversation $conversationId: $e');
+      throw Exception('Failed to delete conversation: $e');
+    }
+  }
+  // --- End New Method ---
 }

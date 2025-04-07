@@ -12,6 +12,8 @@ from fastapi import FastAPI
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.errors import ServerSelectionTimeoutError, ConnectionFailure
 from dotenv import load_dotenv, find_dotenv
+from bson.codec_options import CodecOptions
+from bson.binary import UuidRepresentation
 
 from mongython.models.user import User
 from mongython.models.llm_model import LLMModel
@@ -50,7 +52,11 @@ def create_mongo_client(uri, attempts=MAX_CONNECTION_ATTEMPTS):
             logger.info(
                 f"Attempting to create MongoDB client (attempt {attempt}/{attempts})"
             )
-            client = AsyncIOMotorClient(uri, serverSelectionTimeoutMS=5000)
+            client = AsyncIOMotorClient(
+                uri, 
+                serverSelectionTimeoutMS=5000,
+                uuidRepresentation='standard'  # Use standard UUID representation
+            )
             return client
         except Exception as e:
             if attempt == attempts:
@@ -69,6 +75,24 @@ def create_mongo_client(uri, attempts=MAX_CONNECTION_ATTEMPTS):
 client = create_mongo_client(MONGO_URI)
 
 
+async def migrate_database(db):
+    """Migrate database to latest schema."""
+    logger.info("Starting database migration")
+    try:
+        # Drop the messages collection to force schema update
+        await db.drop_collection("messages")
+        logger.info("Dropped messages collection for schema update")
+        
+        # Reinitialize Beanie with new schema
+        await init_beanie(
+            database=db,
+            document_models=[User, LLMModel, Conversation, Message],
+        )
+        logger.info("Successfully migrated database schema")
+    except Exception as e:
+        logger.error(f"Failed to migrate database: {e}")
+        raise
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize database connection on startup and close on shutdown."""
@@ -76,16 +100,20 @@ async def lifespan(app: FastAPI):
     for attempt in range(1, MAX_CONNECTION_ATTEMPTS + 1):
         try:
             # Verify database connectivity before initializing Beanie
-            await client.admin.command("ismaster")
+            await client.admin.command("ping")
             logger.info("Successfully connected to MongoDB server")
 
             db_name = parsed_uri.path.strip("/") or "otto"
             logger.info(f"Using database: {db_name}")
 
-            await init_beanie(
-                database=client[db_name],
-                document_models=[User, LLMModel, Conversation, Message],
+            # Configure the database with proper UUID handling
+            db = client[db_name]
+            db = db.with_options(
+                codec_options=CodecOptions(uuid_representation=UuidRepresentation.STANDARD)
             )
+
+            # Migrate database if needed
+            await migrate_database(db)
             logger.info("Database connection established")
             break
         except (ServerSelectionTimeoutError, ConnectionFailure) as e:

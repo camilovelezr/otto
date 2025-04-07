@@ -12,10 +12,13 @@ import openai
 from pydantic import BaseModel, UUID4
 
 from mongython.models.conversation import Conversation
-from mongython.models.message import Message, TokenWindowState
+from mongython.models.message import Message # TokenWindowState removed as it's part of Conversation now
 from mongython.api.errors import ErrorResponse
 from mongython.api.users import get_current_user
 from mongython.models.user import User
+from mongython.utils.server_encryption import server_encryption # Import server encryption
+import openai # Import openai
+from mongython.models.llm_model import LLMModel # Import LLMModel for summary model lookup
 from dotenv import load_dotenv, find_dotenv
 import os
 
@@ -48,9 +51,9 @@ class ConversationResponse(BaseModel):
     created_at: str
     updated_at: str
     token_window: Dict[str, Any]
-    tags: List[str] = []
-    detected_topics: List[str] = []
-    summary: Optional[str] = None
+    # tags: List[str] = [] # Removed
+    # detected_topics: List[str] = [] # Removed
+    # summary: Optional[str] = None # Removed
 
 
 class ConversationListResponse(BaseModel):
@@ -60,11 +63,18 @@ class ConversationListResponse(BaseModel):
 class MessageResponse(BaseModel):
     id: str
     role: str
-    content: str
+    # content: Optional[str] = None # Removed plain content field
+    content: Optional[str] = None # Renamed from encrypted_content, holds encrypted data
+    # is_encrypted: bool # Removed
+    # E2EE fields now returned by Message.to_dict()
+    encrypted_key: Optional[str] = None
+    iv: Optional[str] = None
+    tag: Optional[str] = None
     created_at: str
     model_id: Optional[str] = None
     token_count: int = 0
     parent_id: Optional[str] = None
+    # encryption_metadata: Optional[Dict[str, Any]] = None # Optionally include if needed
 
 
 class MessageListResponse(BaseModel):
@@ -73,14 +83,38 @@ class MessageListResponse(BaseModel):
 
 class MessageRequest(BaseModel):
     role: str
-    content: str
+    # Content is now always the base64 encrypted string (IV + Ciphertext + Tag)
+    content: str # Renamed from encrypted_content conceptually
+    # is_encrypted: bool = False # Removed, always true
+    # E2EE fields required from client
+    encrypted_key: Optional[str] = None
+    iv: Optional[str] = None
+    tag: Optional[str] = None
     model_id: Optional[str] = None
     parent_id: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
+    # encryption_metadata: Optional[Dict[str, Any]] = None # Optional metadata from client
 
 
 class TitleUpdateRequest(BaseModel):
     title: str
+
+# --- New Models for Summarization ---
+class SummarizeRequestMessage(BaseModel):
+    role: str
+    content: Optional[str] = None # Renamed from encrypted_content
+    # encrypted_content: Optional[str] = None # Removed
+    # Add the missing optional fields expected for decryption
+    encrypted_key: Optional[str] = None
+    iv: Optional[str] = None
+    tag: Optional[str] = None
+    # is_encrypted: bool # Removed
+
+class SummarizeRequest(BaseModel):
+    messages: List[SummarizeRequestMessage]
+
+class SummarizeResponse(BaseModel):
+    title: str
+# --- End New Models ---
 
 
 @router.get("/list", response_model=ConversationListResponse)
@@ -110,9 +144,9 @@ async def get_conversations(
                     created_at=conv.created_at.isoformat(),
                     updated_at=conv.updated_at.isoformat(),
                     token_window=conv.token_window.dict(),
-                    tags=conv.tags,
-                    detected_topics=conv.detected_topics,
-                    summary=conv.summary,
+                    # tags=conv.tags, # Removed
+                    # detected_topics=conv.detected_topics, # Removed
+                    # summary=conv.summary, # Removed
                 )
                 for conv in conversations
             ]
@@ -125,23 +159,28 @@ async def get_conversations(
         )
 
 
-@router.post(
-    "/create", response_model=ConversationResponse, status_code=status.HTTP_201_CREATED
-)
-async def create_conversation(current_user: User = Depends(get_current_user)):
+@router.post("")
+async def create_conversation(
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
     """Create a new conversation."""
-    conversation = await Conversation.create_initial(current_user.id)
-
-    return ConversationResponse(
-        id=str(conversation.id),
-        title=conversation.title,
-        created_at=conversation.created_at.isoformat(),
-        updated_at=conversation.updated_at.isoformat(),
-        token_window=conversation.token_window.dict(),
-        tags=conversation.tags,
-        detected_topics=conversation.detected_topics,
-        summary=conversation.summary,
-    )
+    try:
+        # Create conversation with user's public key for encryption
+        conversation = await Conversation.create_initial(
+            current_user,
+            user_public_key=current_user.public_key if current_user.public_key else None
+        )
+        
+        logger.info(f"Created conversation {conversation.id} for user {current_user.id}")
+        logger.debug(f"Encryption setup: has_public_key={bool(current_user.public_key)}, has_conv_key={bool(conversation.encrypted_conversation_key)}")
+        
+        return conversation.to_dict()
+    except Exception as e:
+        logger.error(f"Failed to create conversation: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create conversation: {str(e)}"
+        )
 
 
 @router.get("/{conversation_id}/get", response_model=ConversationResponse)
@@ -166,10 +205,151 @@ async def get_conversation(
         created_at=conversation.created_at.isoformat(),
         updated_at=conversation.updated_at.isoformat(),
         token_window=conversation.token_window.dict(),
-        tags=conversation.tags,
-        detected_topics=conversation.detected_topics,
-        summary=conversation.summary,
-    )
+        # tags=conversation.tags, # Removed
+        # detected_topics=conversation.detected_topics, # Removed
+        # summary=conversation.summary, # Removed
+        )
+
+# --- New Summarization Endpoint ---
+@router.put("/{conversation_id}/summarize", response_model=SummarizeResponse)
+async def summarize_conversation(
+    conversation_id: str,
+    request: SummarizeRequest = Body(...),
+    current_user: User = Depends(get_current_user),
+):
+    """Generate and update the title for a conversation based on initial messages."""
+    try:
+        conv_uuid = UUID4(conversation_id)
+        conversation = await Conversation.find_one(
+            Conversation.id == conv_uuid, fetch_links=True
+        ).find_one(Conversation.user.id == current_user.id, fetch_links=True)
+
+        if not conversation:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Conversation not found or access denied",
+            )
+
+        if not request.messages:
+             raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No messages provided for summarization",
+            )
+
+        # Decrypt received messages (encrypted with server key)
+        decrypted_messages = []
+        for msg_data in request.messages:
+            # is_encrypted removed, assume always encrypted. Check for content instead.
+            if not msg_data.content:
+                 logger.warning(f"Received message with no content for summarization in conv {conversation_id}, skipping.")
+                 continue # Or raise error? Skipping for now.
+            try:
+                # Use the renamed 'content' field
+                encrypted_components = {
+                    'encrypted_content': msg_data.content, # Use renamed field, map to expected key
+                    'encrypted_key': getattr(msg_data, 'encrypted_key', None), # Handle potential missing optional fields
+                    'iv': getattr(msg_data, 'iv', None),
+                    'tag': getattr(msg_data, 'tag', None)
+                }
+                # Ensure all components needed for decryption are present
+                # Check encrypted_content specifically, others might be optional depending on exact decryption needs
+                if not encrypted_components['encrypted_content'] or not encrypted_components['encrypted_key'] or not encrypted_components['iv'] or not encrypted_components['tag']:
+                     logger.warning(f"Skipping message due to missing encryption components for summarization: {encrypted_components}")
+                     continue
+
+                decrypted_content = server_encryption.decrypt_from_client(encrypted_components)
+                decrypted_messages.append({"role": msg_data.role, "content": decrypted_content})
+            except Exception as e:
+                logger.error(f"Failed to decrypt message for summarization in conv {conversation_id}: {e}", exc_info=True)
+                # Decide whether to proceed with partial context or fail
+                # For now, let's fail if any decryption error occurs to ensure title quality
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Failed to decrypt message content for summarization: {e}"
+                )
+
+        if not decrypted_messages:
+             raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Could not decrypt any messages for summarization",
+            )
+
+        # Prepare prompt for summarization model (Simplified)
+        summary_prompt = {
+            "role": "system",
+            "content": (
+                "You are the best conversation summarizer in the world."
+                "You generate fun, engaging, and descriptive titles for conversations."
+                "Generate AN EXTREMELY SHORT descriptive title "
+                "(3-5 words, emojis allowed) for this conversation "
+                "based on the first few messages. For example, "
+                "'Hiking Trip Preparation'"
+                "Do not include any other text in your response, just the title."
+                "Do not format it, just return the text as a string with no markdown formatting."
+                "I REPEAT, it MUST BE SHORT, like 3-5 words, no more than 10 characters!!."
+            )
+        }
+        # Format the conversation history as a single string for the user message
+        conversation_text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in decrypted_messages])
+        llm_input_messages = [
+            summary_prompt,
+            {"role": "user", "content": f"Conversation history: {conversation_text}"}
+        ]
+
+        # Log the exact input being sent to the LLM
+        logger.debug(f"Sending messages to summarization LLM: {llm_input_messages}")
+
+        # Call the summarization LLM
+        try:
+            logger.info(f"Calling summarization model ({SUMMARY_MODEL}) for conv {conversation_id}")
+            # Use the user's auth token, consistent with the /generate endpoint
+            if not current_user.auth_token:
+                 logger.error(f"User {current_user.id} missing auth token for summarization call.")
+                 raise HTTPException(status_code=500, detail="User auth token missing for summarization.")
+
+            client_ = openai.AsyncOpenAI(api_key=current_user.auth_token, base_url=LITELLM_URL)
+            logger.debug(f"Summarization input messages: {llm_input_messages}")
+            response = await client_.chat.completions.create(
+                model=SUMMARY_MODEL,
+                messages=llm_input_messages,
+                max_tokens=20, # Keep title short
+                temperature=0.5, # Be somewhat creative but not too random
+            )
+            logger.debug(f"Summarization response: {response}")
+            generated_title = response.choices[0].message.content.strip().replace("'", "").replace('"', '').replace("*", "")
+            logger.info(f"Generated title for conv {conversation_id}: '{generated_title}'")
+
+            # Basic cleanup/validation
+            if not generated_title:
+                 generated_title = conversation_text # Fallback title
+
+            # Limit length if needed (optional)
+            generated_title = generated_title[:50] # Max 50 chars
+
+        except Exception as llm_e:
+            logger.error(f"Error calling summarization model for conv {conversation_id}: {llm_e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Failed to generate conversation title: {llm_e}"
+            )
+
+        # Update conversation title in DB
+        conversation.title = generated_title
+        conversation.updated_at = datetime.now()
+        await conversation.save()
+        logger.info(f"Updated title for conversation {conversation_id}")
+
+        return SummarizeResponse(title=generated_title)
+
+    except HTTPException:
+        raise # Re-raise validation/auth errors
+    except Exception as e:
+        logger.error(f"Unexpected error during conversation summarization for {conversation_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to summarize conversation: {e}"
+        )
+# --- End New Summarization Endpoint ---
 
 
 @router.put("/{conversation_id}/update_title", response_model=ConversationResponse)
@@ -199,9 +379,9 @@ async def update_conversation_title(
         created_at=conversation.created_at.isoformat(),
         updated_at=conversation.updated_at.isoformat(),
         token_window=conversation.token_window.model_dump(),
-        tags=conversation.tags,
-        detected_topics=conversation.detected_topics,
-        summary=conversation.summary,
+        # tags=conversation.tags, # Removed
+        # detected_topics=conversation.detected_topics, # Removed
+        # summary=conversation.summary, # Removed
     )
 
 
@@ -221,25 +401,27 @@ async def get_conversation_messages(
             detail="Conversation not found",
         )
 
+    logger.debug(f"Fetching messages for conversation {conversation_id} (User: {current_user.id})")
     messages = (
         await Message.find(Message.conversation_id == conversation.id)
         .sort("+created_at")
         .to_list()
     )
+    logger.info(f"Found {len(messages)} messages in DB for conversation {conversation_id}")
 
+    response_messages = []
+    for msg in messages:
+        try:
+            msg_dict = msg.to_dict()
+            logger.debug(f"Processing message {msg.id} for response. Role: {msg_dict.get('role')}, HasContent: {msg_dict.get('content') is not None}, HasKey: {msg_dict.get('encrypted_key') is not None}")
+            response_messages.append(MessageResponse(**msg_dict))
+        except Exception as e:
+            logger.error(f"Error converting message {msg.id} to dict for response: {e}", exc_info=True)
+            # Optionally skip the message or add a placeholder
+
+    logger.debug(f"Returning {len(response_messages)} messages for conversation {conversation_id}")
     return MessageListResponse(
-        messages=[
-            MessageResponse(
-                id=str(msg.id),
-                role=msg.role,
-                content=msg.content,
-                created_at=msg.created_at.isoformat(),
-                model_id=msg.model_id,
-                token_count=msg.token_count,
-                parent_id=str(msg.parent_message_id) if msg.parent_message_id else None,
-            )
-            for msg in messages
-        ]
+        messages=response_messages
     )
 
 
@@ -249,7 +431,11 @@ async def add_message(
     message_data: MessageRequest,
     current_user: User = Depends(get_current_user),
 ):
-    """Add a message to a conversation."""
+    """
+    Add a message to a conversation.
+    If message_data.is_encrypted is True, message_data.content is expected
+    to be the Base64 encoded encrypted string (IV + Ciphertext + Tag).
+    """
     try:
         conv_uuid = UUID4(conversation_id)
         # First find the conversation without the user check to help with debugging
@@ -305,9 +491,29 @@ async def add_message(
                     detail="Invalid parent message ID format",
                 )
 
-        # Add the message based on role
+        # Add the message based on role. is_encrypted is removed, assume always encrypted.
+        # message_content = message_data.content # Keep for clarity below
+        # is_encrypted = message_data.is_encrypted # Removed
+
         if message_data.role == "user":
-            message = await conversation.add_user_message(content=message_data.content)
+            # Create the message document directly, setting new E2EE fields
+            message = Message(
+                role="user",
+                conversation_id=conv_uuid,
+                parent_message_id=parent_message_id,
+                # is_encrypted=is_encrypted, # Removed
+                content=message_data.content, # Assign encrypted content directly
+                encrypted_key=message_data.encrypted_key,
+                iv=message_data.iv,
+                tag=message_data.tag,
+                token_count=0 # Cannot estimate tokens for encrypted
+                # encryption_metadata=message_data.encryption_metadata # Optional
+            )
+            # Removed if/else based on is_encrypted
+            await message.save()
+            # Update conversation token window
+            conversation.token_window.update_from_message(message, is_input=True)
+
         elif message_data.role == "assistant":
             if not message_data.model_id:
                 raise HTTPException(
@@ -315,10 +521,10 @@ async def add_message(
                     detail="model_id is required for assistant messages",
                 )
 
+            # Parent message ID logic remains the same (find most recent user message if needed)
             if not parent_message_id:
-                # Find the most recent user message to use as parent
+                 # Find the most recent user message to use as parent
                 try:
-                    # Fix the query operator issue by using a dictionary-based query
                     user_messages = (
                         await Message.find(
                             {"conversation_id": conversation.id, "role": "user"}
@@ -327,48 +533,46 @@ async def add_message(
                         .limit(1)
                         .to_list()
                     )
-
                     if user_messages:
                         parent_message_id = user_messages[0].id
+                    else: # Handle case where no user message exists yet
+                         parent_message_id = None # Or handle as error if required
                 except Exception as e:
-                    print(f"Error finding user messages: {str(e)}")
-                    # Continue without parent message if there's an error
+                    logger.error(f"Error finding parent user message: {e}", exc_info=True)
+                    parent_message_id = None # Fallback or raise error
 
-            message = await conversation.add_assistant_message(
-                content=message_data.content,
-                model_id=message_data.model_id,
+            # Create the message document directly, setting new E2EE fields
+            message = Message(
+                role="assistant",
+                conversation_id=conv_uuid,
                 parent_message_id=parent_message_id,
-                metadata=message_data.metadata,
+                model_id=message_data.model_id,
+                # is_encrypted=is_encrypted, # Removed
+                content=message_data.content, # Assign encrypted content directly
+                encrypted_key=message_data.encrypted_key,
+                iv=message_data.iv,
+                tag=message_data.tag,
+                token_count=0 # Cannot estimate tokens for encrypted
+                 # encryption_metadata=message_data.encryption_metadata # Optional
             )
+            # Removed if/else based on is_encrypted
+            await message.save()
+             # Update conversation token window
+            conversation.token_window.update_from_message(message, is_input=False)
+
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid message role. Must be 'user' or 'assistant'",
             )
 
-        # Generate title after we have multiple messages
-        try:
-            message_count = await Message.find(
-                {"conversation_id": conversation.id}
-            ).count()
+        # Update conversation timestamp
+        conversation.updated_at = datetime.now()
+        await conversation.save() # Save token window and updated_at changes
 
-            if message_count >= 2 and not conversation.title:
-                await generate_conversation_title(conversation)
-        except Exception as e:
-            # Don't fail the whole request if title generation fails
-            print(f"Error generating title: {str(e)}")
+        # Return the created message using its to_dict method
+        return MessageResponse(**message.to_dict())
 
-        return MessageResponse(
-            id=str(message.id),
-            role=message.role,
-            content=message.content,
-            created_at=message.created_at.isoformat(),
-            model_id=message.model_id,
-            token_count=message.token_count,
-            parent_id=(
-                str(message.parent_message_id) if message.parent_message_id else None
-            ),
-        )
     except HTTPException:
         # Re-raise HTTP exceptions
         raise
@@ -438,68 +642,13 @@ async def get_message_thread(
 
     return MessageListResponse(
         messages=[
-            MessageResponse(
-                id=str(msg.id),
-                role=msg.role,
-                content=msg.content,
-                created_at=msg.created_at.isoformat(),
-                model_id=msg.model_id,
-                token_count=msg.token_count,
-                parent_id=str(msg.parent_message_id) if msg.parent_message_id else None,
-            )
+            # Use the Message model's to_dict method
+            MessageResponse(**msg.to_dict())
             for msg in thread
         ]
     )
 
 
-async def generate_conversation_title(conversation: Conversation) -> Optional[str]:
-    """Generate a title for a conversation based on its messages."""
-    try:
-
-        # Get the first few messages
-        messages = await conversation.get_messages()
-        if len(messages) < 2:
-            return None
-
-        # Extract just what we need
-        message_dicts = [
-            {"role": msg.role, "content": msg.content}
-            for msg in messages[:2]  # Limit to first 5 messages to avoid token limits
-        ]
-
-        # Add system prompt
-        message_dicts.insert(
-            0,
-            {
-                "role": "system",
-                "content": (
-                    "Generate a short, concise title (4-8 words) for this conversation. "
-                    "Focus on the main topic or question. "
-                    "DO NOT use phrases like 'Conversation about' or 'Discussion on'. "
-                    "Just provide the title directly."
-                ),
-            },
-        )
-
-        # Call the LLM
-        client_ = openai.AsyncOpenAI(api_key=LITELLM_MASTER_KEY, base_url=LITELLM_URL)
-        response = await client_.chat.completions.create(
-            model=SUMMARY_MODEL,
-            messages=message_dicts,
-            max_tokens=60,
-            temperature=0.7,
-        )
-        title = response.choices[0].message.content.strip().strip('"')
-
-        # Update conversation title
-        conversation.title = title
-        await conversation.save()
-
-        return title
-
-    except Exception as e:
-        logger.error(f"Error generating conversation title: {e}")
-        return None
 
 
 @router.delete("/all", response_model=dict)
@@ -536,42 +685,71 @@ async def delete_all_conversations(
         )
 
 
-# @router.post("/{conversation_id}/migrate", response_model=ConversationResponse)
-# async def migrate_conversation(
-#     conversation_id: str,
-#     current_user: User = Depends(get_current_user),
-# ):
-#     """Migrate a conversation from the old format to the new format."""
-#     try:
-#         # Import the old conversation model
-#         from mongython.models.conversation_old import Conversation as OldConversation
+# --- Admin Endpoints ---
 
-#         # Check if the user owns the conversation
-#         old_conversation = await OldConversation.get(conversation_id, fetch_links=True)
-#         if not old_conversation or str(old_conversation.user.id) != current_user.id:
-#             raise HTTPException(
-#                 status_code=status.HTTP_404_NOT_FOUND,
-#                 detail="Conversation not found",
-#             )
+@router.delete("/admin/all", response_model=dict)
+async def admin_delete_all_conversations():
+    """Admin endpoint to delete all conversations from all users. No auth required - meant for local admin use."""
+    try:
+        # Find all conversations
+        conversations = await Conversation.find_all().to_list()
 
-#         # Perform the migration
-#         new_conversation = await Conversation.migrate_from_old_format(conversation_id)
+        # Delete all messages for each conversation
+        total_messages = 0
+        for conversation in conversations:
+            messages = await Message.find(Message.conversation_id == conversation.id).to_list()
+            total_messages += len(messages)
+            for message in messages:
+                await message.delete()
+            await conversation.delete()
 
-#         # Return the migrated conversation
-#         return ConversationResponse(
-#             id=str(new_conversation.id),
-#             title=new_conversation.title,
-#             created_at=new_conversation.created_at.isoformat(),
-#             updated_at=new_conversation.updated_at.isoformat(),
-#             token_window=new_conversation.token_window.dict(),
-#             tags=new_conversation.tags,
-#             detected_topics=new_conversation.detected_topics,
-#             summary=new_conversation.summary,
-#         )
+        return {
+            "status": "success",
+            "conversations_deleted": len(conversations),
+            "messages_deleted": total_messages
+        }
+    except Exception as e:
+        logger.error(f"Admin error deleting all conversations: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error deleting all conversations: {str(e)}"
+        )
 
-#     except Exception as e:
-#         logger.error(f"Error migrating conversation: {e}")
-#         raise HTTPException(
-#             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-#             detail=f"Error migrating conversation: {str(e)}",
-#         )
+@router.delete("/admin/user/{username}", response_model=dict)
+async def admin_delete_user_conversations(username: str):
+    """Admin endpoint to delete all conversations for a specific user. No auth required - meant for local admin use."""
+    try:
+        # Find the user first
+        user = await User.find_one(User.username == username)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"User {username} not found"
+            )
+
+        # Find all conversations for this user
+        conversations = await Conversation.find(Conversation.user.id == user.id).to_list()
+
+        # Delete all messages and conversations
+        total_messages = 0
+        for conversation in conversations:
+            messages = await Message.find(Message.conversation_id == conversation.id).to_list()
+            total_messages += len(messages)
+            for message in messages:
+                await message.delete()
+            await conversation.delete()
+
+        return {
+            "status": "success",
+            "username": username,
+            "conversations_deleted": len(conversations),
+            "messages_deleted": total_messages
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Admin error deleting conversations for user {username}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error deleting conversations for user {username}: {str(e)}"
+        )
