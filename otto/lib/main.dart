@@ -141,8 +141,9 @@ class AuthWrapper extends StatelessWidget {
       if (currentUser != null) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           chatProvider.setUserId(
-            currentUser.id?.toString() ?? currentUser.username,
-            username: currentUser.username
+            currentUser.id?.toString() ?? currentUser.username, // Keep ID logic
+            username: currentUser.username, // Keep username for auth header
+            name: currentUser.name // Pass the display name
           );
         });
       }

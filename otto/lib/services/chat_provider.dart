@@ -24,7 +24,8 @@ class ChatProvider with ChangeNotifier {
   String _currentStreamedResponse = '';
   String? _currentConversationId;
   String? _currentUserId;
-  String? _currentUserName;
+  String? _currentUserName; // Keep for potential internal use/logging
+  String? _currentDisplayName; // Add field for display name
   static const String _selectedModelKey = 'selected_model';
 
   // --- New State for Conversation List ---
@@ -53,7 +54,8 @@ class ChatProvider with ChangeNotifier {
   String? get error => _error;
   String? get conversationId => _currentConversationId;
   String? get currentUserId => _currentUserId; // Add getter
-  String? get currentUserName => _currentUserName;
+  String? get currentUserName => _currentUserName; // Keep getter
+  String? get currentDisplayName => _currentDisplayName; // Add getter for display name
   String get currentStreamedResponse => _currentStreamedResponse;
 
   // --- New Getters ---
@@ -676,13 +678,14 @@ class ChatProvider with ChangeNotifier {
   }
   
   // Set user information and initialize conversation list
-  Future<void> setUserId(String userId, {String? username}) async {
+  Future<void> setUserId(String userId, {String? username, String? name}) async {
     _currentUserId = userId;
-    _currentUserName = username ?? userId;
+    _currentUserName = username ?? userId; // Keep username for auth header
+    _currentDisplayName = name ?? _currentUserName; // Use displayName, fallback to username
     
-    _chatService.setCurrentUsername(_currentUserName!);
+    _chatService.setCurrentUsername(_currentUserName!); // Use username for auth header
     
-    debugPrint('Set user ID: $userId and username: ${username ?? userId}');
+    debugPrint('Set user ID: $userId, username: $_currentUserName, displayName: $_currentDisplayName');
     
     // Reset state BEFORE async calls
     _currentConversationId = null;
