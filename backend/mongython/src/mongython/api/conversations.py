@@ -35,7 +35,7 @@ router = APIRouter(
 
 logger = logging.getLogger(__name__)
 
-SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "llama-3.2-1b-preview")
+SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "llama-3.1-8b-instant")
 LITELLM_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY")
 LITELLM_URL = os.getenv("LITELLM_URL")
 
@@ -281,7 +281,7 @@ async def summarize_conversation(
                 "You are the best conversation summarizer in the world."
                 "You generate fun, engaging, and descriptive titles for conversations."
                 "Generate AN EXTREMELY SHORT descriptive title "
-                "(3-5 words, emojis allowed) for this conversation "
+                "(3-4 words, emojis allowed) for this conversation "
                 "based on the first few messages. For example, "
                 "'Hiking Trip Preparation'"
                 "Do not include any other text in your response, just the title."
@@ -312,8 +312,8 @@ async def summarize_conversation(
             response = await client_.chat.completions.create(
                 model=SUMMARY_MODEL,
                 messages=llm_input_messages,
-                max_tokens=20, # Keep title short
-                temperature=0.5, # Be somewhat creative but not too random
+                max_tokens=10, # Keep title short
+                temperature=0.77, # Be somewhat creative but not too random
             )
             logger.debug(f"Summarization response: {response}")
             generated_title = response.choices[0].message.content.strip().replace("'", "").replace('"', '').replace("*", "")

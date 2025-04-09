@@ -167,9 +167,9 @@ class _CustomScrollbarThumbState extends State<CustomScrollbarThumb> {
       _lastScrollUpdate = now;
     });
 
-    // Hide scrollbar after 1.5 seconds of inactivity
+    // Hide scrollbar after inactivity (reduced to 400ms for even faster disappearance)
     _scrollVisibilityTimer?.cancel();
-    _scrollVisibilityTimer = Timer(const Duration(milliseconds: 1500), () {
+    _scrollVisibilityTimer = Timer(const Duration(milliseconds: 400), () {
       if (mounted && !_isDragging && !_isHovering) {
         setState(() {
           _isScrolling = false;
@@ -192,7 +192,7 @@ class _CustomScrollbarThumbState extends State<CustomScrollbarThumb> {
     // If we're not hovering, schedule hiding the scrollbar
     if (!_isHovering) {
       _scrollVisibilityTimer?.cancel();
-      _scrollVisibilityTimer = Timer(const Duration(milliseconds: 1500), () {
+      _scrollVisibilityTimer = Timer(const Duration(milliseconds: 400), () {
         if (mounted && !_isDragging && !_isHovering) {
           setState(() {
             _isScrolling = false;
@@ -252,7 +252,7 @@ class _CustomScrollbarThumbState extends State<CustomScrollbarThumb> {
           _isHovering = false;
           if (!_isDragging) {
             _scrollVisibilityTimer?.cancel();
-            _scrollVisibilityTimer = Timer(const Duration(milliseconds: 1500), () {
+            _scrollVisibilityTimer = Timer(const Duration(milliseconds: 400), () {
               if (mounted && !_isDragging && !_isHovering) {
                 setState(() {
                   _isScrolling = false;
