@@ -945,4 +945,41 @@ class ChatService {
   }
   // --- End New Method ---
 
+  // --- New Method: Delete All Conversations ---
+  Future<Map<String, dynamic>> deleteAllConversations() async {
+    if (_currentUsername == null || _currentUsername!.isEmpty) {
+      throw Exception('Not authenticated or username missing');
+    }
+    try {
+      debugPrint('Deleting all conversations for user: $_currentUsername');
+      final response = await _client.delete(
+        Uri.parse('$_baseUrl/conversations/me/all'), // Use the new endpoint
+        headers: await _getHeaders(),
+      ).timeout(_longTimeout); // Use longer timeout for potentially long operation
+
+      if (response.statusCode == 200) {
+        // Explicitly decode response body as UTF-8 before JSON decoding
+        final data = json.decode(utf8.decode(response.bodyBytes));
+        debugPrint('Successfully deleted all conversations: ${data['message']}');
+        return data; // Return the response data (e.g., counts)
+      } else {
+        // Try parsing error detail
+        String errorDetail = 'Failed to delete all conversations: ${response.statusCode}';
+        try {
+          // Explicitly decode response body as UTF-8 before JSON decoding
+          final errorData = json.decode(utf8.decode(response.bodyBytes));
+          if (errorData['detail'] != null) {
+            errorDetail = 'Delete all failed: ${errorData['detail']}';
+          }
+        } catch (_) {} // Ignore parsing errors
+        debugPrint('Failed to delete all conversations: ${response.statusCode}, Body: ${response.body}');
+        throw Exception(errorDetail);
+      }
+    } catch (e) {
+      debugPrint('Error deleting all conversations: $e');
+      rethrow; // Rethrow to be handled by ChatProvider
+    }
+  }
+  // --- End New Method ---
+
 } // End of ChatService class

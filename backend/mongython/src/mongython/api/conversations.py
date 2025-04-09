@@ -612,6 +612,52 @@ async def delete_conversation(
     return None
 
 
+@router.delete("/me/all", response_model=Dict[str, Any], status_code=status.HTTP_200_OK)
+async def delete_my_conversations(
+    current_user: User = Depends(get_current_user),
+):
+    """Delete all conversations and associated messages for the authenticated user."""
+    try:
+        logger.info(f"Initiating deletion of all conversations for user {current_user.id} ({current_user.username})")
+        # Find all conversations for the current user
+        conversations = await Conversation.find(
+            Conversation.user.id == current_user.id
+        ).to_list()
+
+        deleted_conversations_count = 0
+        deleted_messages_count = 0
+
+        if not conversations:
+            logger.info(f"No conversations found for user {current_user.id} to delete.")
+            return {"message": "No conversations found to delete.", "deleted_conversations_count": 0, "deleted_messages_count": 0}
+
+        # Delete all messages for each conversation, then the conversation itself
+        for conversation in conversations:
+            try:
+                messages_deleted = await Message.find(Message.conversation_id == conversation.id).delete()
+                deleted_messages_count += messages_deleted.deleted_count if messages_deleted else 0
+                await conversation.delete()
+                deleted_conversations_count += 1
+                logger.debug(f"Deleted conversation {conversation.id} and {messages_deleted.deleted_count if messages_deleted else 0} messages for user {current_user.id}")
+            except Exception as inner_e:
+                logger.error(f"Error deleting conversation {conversation.id} or its messages for user {current_user.id}: {inner_e}", exc_info=True)
+                # Decide whether to continue or stop on error. Continuing for now.
+
+        logger.info(f"Successfully deleted {deleted_conversations_count} conversations and {deleted_messages_count} messages for user {current_user.id}")
+        return {
+            "message": "All conversations deleted successfully",
+            "deleted_conversations_count": deleted_conversations_count,
+            "deleted_messages_count": deleted_messages_count,
+        }
+
+    except Exception as e:
+        logger.error(f"Error deleting all conversations for user {current_user.id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An unexpected error occurred while deleting conversations: {str(e)}",
+        )
+
+
 @router.get(
     "/{conversation_id}/messages/{message_id}/get_thread",
     response_model=MessageListResponse,

@@ -375,6 +375,70 @@ class AuthService {
     await prefs.remove(_tokenKey);
     await prefs.remove(_userKey);
   }
+
+  // Update user's display name
+  Future<User> updateName(String newName) async {
+    if (!isLoggedIn || _currentUser == null) {
+      throw Exception('Not authenticated');
+    }
+    try {
+      final response = await http.put(
+        Uri.parse('$_baseUrl/users/me/name'),
+        headers: authHeaders, // Use existing authHeaders getter
+        body: json.encode({'name': newName}),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        // Update current user object
+        _currentUser = _currentUser!.copyWith(
+          name: data['name'],
+          updatedAt: DateTime.parse(data['updated_at']),
+        );
+        // Re-save updated user data to storage
+        await _saveUserToStorage(_token!, _currentUser!);
+        return _currentUser!;
+      } else {
+        _throwFormattedError(response, 'Failed to update name');
+        throw Exception('Failed to update name: Unknown error'); // Should not be reached
+      }
+    } catch (e) {
+      debugPrint('Error updating name: $e');
+      rethrow;
+    }
+  }
+
+  // Update user's password
+  Future<void> updatePassword(String currentPassword, String newPassword) async {
+    try {
+      debugPrint('Starting password update process...');
+      
+      if (_currentUser == null || _token == null) {
+        throw Exception('Not authenticated');
+      }
+
+      final response = await http.put(
+        Uri.parse('$_baseUrl/users/me/password'),
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Username': _currentUser!.username,
+        },
+        body: json.encode({
+          'current_password': currentPassword,
+          'new_password': newPassword,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        debugPrint('Password updated successfully');
+      } else {
+        _throwFormattedError(response, 'Failed to update password');
+      }
+    } catch (e) {
+      debugPrint('Error updating password: $e');
+      rethrow;
+    }
+  }
   
   // Save user data to storage
   Future<void> _saveUserToStorage(String token, User user) async {
@@ -434,4 +498,3 @@ class AuthService {
     };
   }
 }
-

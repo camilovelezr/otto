@@ -469,3 +469,52 @@ async def login_user(login_data: LoginRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error during login",
         )
+
+class UserPasswordUpdate(BaseModel):
+    """Request model for updating user's password."""
+    current_password: str = Field(..., description="Current password for verification")
+    new_password: str = Field(..., min_length=8, description="New password (min 8 characters)")
+
+@router.put(
+    "/me/password",
+    response_model=Dict[str, str],
+    summary="Update user's password",
+    description="Updates the password for the authenticated user after verifying current password.",
+    responses={
+        400: {"model": ErrorResponse, "description": "Bad request (e.g., weak password)"},
+        401: {"model": ErrorResponse, "description": "Authentication required or invalid current password"},
+    },
+)
+async def update_user_password(
+    update_data: UserPasswordUpdate,
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, str]:
+    """Updates the authenticated user's password after verifying the current password."""
+    try:
+        # Verify current password
+        if not await current_user.verify_password(update_data.current_password):
+            logger.warning(f"Failed password update attempt for user {current_user.username}: incorrect current password")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Current password is incorrect",
+            )
+
+        # Set the new password
+        await current_user.set_password(update_data.new_password)
+        logger.info(f"Password updated successfully for user {current_user.username}")
+        return {"status": "success", "message": "Password updated successfully"}
+
+    except ValueError as e:
+        logger.warning(f"Invalid new password for user {current_user.username}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating password for user {current_user.username}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update password",
+        )

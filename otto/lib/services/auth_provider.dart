@@ -188,6 +188,45 @@ class AuthProvider extends ChangeNotifier {
       notifyListeners();
     }
   }
+
+  // Update user's display name
+  Future<bool> updateName(String newName) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+    try {
+      await _authService.updateName(newName);
+      // No need to update _currentUser locally as AuthService handles it and saves to storage.
+      // We rely on the next app load or a manual refresh to get the updated user data.
+      // Alternatively, could fetch user data again here, but might be overkill.
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _isLoading = false;
+      _setError(e);
+      notifyListeners();
+      return false;
+    }
+  }
+
+  // Update user's password
+  Future<bool> updatePassword(String currentPassword, String newPassword) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+    try {
+      await _authService.updatePassword(currentPassword, newPassword);
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _isLoading = false;
+      _setError(e);
+      notifyListeners();
+      return false;
+    }
+  }
   
   // Clear any error messages
   void clearError() {

@@ -217,22 +217,43 @@ class ChatProvider with ChangeNotifier {
   }
   
   // Initialize a new conversation if one doesn't exist (internal use)
-  Future<void> _ensureConversationExists() async {
+  // Returns the conversation ID
+  Future<String> _ensureConversationExists() async {
     if (_currentConversationId == null) {
       try {
-        debugPrint('Ensuring conversation exists...');
-        final conversationId = await _chatService.createConversation(); // Pass userId REMOVED
+        debugPrint('Creating a new conversation for actual use...');
+        final conversationId = await _chatService.createConversation();
         if (conversationId == null || conversationId.isEmpty) {
           throw Exception('Backend returned empty conversation ID');
         }
+        
+        // Set the current conversation ID - always set it here
         _currentConversationId = conversationId;
-        debugPrint('Ensured conversation exists with ID: $_currentConversationId');
+        
+        // Add the new conversation to the list
+        final newConversation = ConversationSummary(
+          id: conversationId,
+          title: "New Conversation",
+          updatedAt: DateTime.now(),
+        );
+        
+        // Remove any existing conversation with the same ID (shouldn't happen, but just in case)
+        _conversationList.removeWhere((c) => c.id == conversationId);
+        
+        // Add to the top of the list
+        _conversationList.insert(0, newConversation);
+        _conversationList.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+        
+        debugPrint('Created new conversation with ID: $_currentConversationId');
+        
+        return conversationId;
       } catch (e) {
-        debugPrint('Error ensuring conversation exists: $e');
+        debugPrint('Error creating conversation: $e');
         throw Exception('Failed to create conversation: $e'); // Rethrow
       }
     } else {
       debugPrint('Conversation already exists: $_currentConversationId');
+      return _currentConversationId!;
     }
   }
 
@@ -260,6 +281,23 @@ class ChatProvider with ChangeNotifier {
   // --- End Internal Fetch Conversation List ---
 
 
+  // Helper to clean up any abandoned temporary conversations
+  void _cleanupTemporaryConversations() {
+    int removedCount = 0;
+    
+    // Remove any conversations with temporary IDs from the list
+    _conversationList.removeWhere((c) {
+      bool isTemp = _isTemporaryConversationId(c.id);
+      if (isTemp) removedCount++;
+      return isTemp;
+    });
+    
+    if (removedCount > 0) {
+      debugPrint('Cleaned up $removedCount abandoned temporary conversation(s)');
+      notifyListeners();
+    }
+  }
+  
   // Fetch conversations for the current user (public, manages state)
   Future<void> fetchConversationList() async {
      if (_currentUserId == null) {
@@ -276,11 +314,14 @@ class ChatProvider with ChangeNotifier {
     ConversationSummary? currentPlaceholder;
     // Find the current placeholder *before* fetching
     final currentConvIndex = _conversationList.indexWhere((c) => c.id == _currentConversationId);
-    if (currentConvIndex != -1 && _conversationList[currentConvIndex].title == "New Conversation") {
+    if (currentConvIndex != -1 && !_isTemporaryConversationId(_currentConversationId)) {
         currentPlaceholder = _conversationList[currentConvIndex];
     }
 
     try {
+      // First clean up any temporary conversations
+      _cleanupTemporaryConversations();
+      
       final fetchedList = await _fetchConversationListInternal(); // Fetch data
 
       if (fetchedList != null) {
@@ -432,9 +473,6 @@ class ChatProvider with ChangeNotifier {
   Future<void> addUserMessage(String content) async {
     if (content.trim().isEmpty) return;
     
-    // Ensure we have a conversation
-    await _ensureConversationExists();
-    
     final message = ChatMessage(
       role: 'user',
       content: content,
@@ -448,7 +486,7 @@ class ChatProvider with ChangeNotifier {
     
     debugPrint('Current message count before sending to API: ${_messages.length}');
     
-    // Now send the message to the AI
+    // Now send the message to the AI (which will handle conversation creation if needed)
     await sendMessage(content);
   }
   
@@ -473,11 +511,60 @@ class ChatProvider with ChangeNotifier {
         return;
       }
       
-      await _ensureConversationExists();
+      // Check if we have a temporary conversation ID
       if (_currentConversationId == null) {
-        setError('Could not create or find a conversation. Please try again.');
+        debugPrint('No conversation ID set, creating a new one');
+        await _ensureConversationExists();
+      } else if (_isTemporaryConversationId(_currentConversationId)) {
+        debugPrint('Detected temporary conversation ID: $_currentConversationId - creating real one');
+        
+        // Store the temp ID
+        String tempId = _currentConversationId!;
+        int tempIndex = _conversationList.indexWhere((c) => c.id == tempId);
+        debugPrint('Temporary conversation found at index: $tempIndex');
+        
+        // First, create a real conversation
+        try {
+          // Clear the current ID before creating a new one
+          _currentConversationId = null;
+          String realConversationId = await _ensureConversationExists();
+          
+          // Now remove the temporary placeholder conversation
+          _conversationList.removeWhere((c) => c.id == tempId);
+          debugPrint('Removed temporary conversation with ID: $tempId');
+          
+          // Ensure the real conversation is at the top of the list
+          int realIndex = _conversationList.indexWhere((c) => c.id == realConversationId);
+          debugPrint('Real conversation index: $realIndex');
+          
+          // If for some reason the real conversation isn't in the list, add it
+          if (realIndex == -1) {
+            _conversationList.insert(0, ConversationSummary(
+              id: realConversationId,
+              title: "New Conversation",
+              updatedAt: DateTime.now(),
+            ));
+            debugPrint('Re-added real conversation to list: $realConversationId');
+          }
+          
+          notifyListeners(); // Notify listeners about list changes
+        } catch (e) {
+          debugPrint('Error creating real conversation: $e');
+          setError('Failed to create conversation: $e');
+          return;
+        }
+      }
+      
+      // Now we should have a valid conversation ID
+      if (_currentConversationId == null) {
+        setError('No conversation ID available. Please try again.');
         return;
       }
+      
+      debugPrint('Using conversation ID for API call: $_currentConversationId');
+      
+      // Store the conversation ID in a local variable to keep it stable throughout this method
+      final String stableConversationId = _currentConversationId!;
       
       final apiMessageHistory = List<ChatMessage>.from(_messages);
       
@@ -498,8 +585,7 @@ class ChatProvider with ChangeNotifier {
       notifyListeners(); // Show placeholder and loading state
       
       debugPrint('Sending messages to API (Count: ${apiMessageHistory.length}):');
-      // ... (optional detailed logging of messages) ...
-
+      
       if (_streamSubscription != null) {
         await _streamSubscription!.cancel();
         _streamSubscription = null;
@@ -511,11 +597,13 @@ class ChatProvider with ChangeNotifier {
         final String modelForApi = _selectedModel!.modelId; // Use modelId directly
         debugPrint('Using model for API request: $modelForApi');
         
+        debugPrint('ABOUT TO CALL STREAM CHAT WITH CONVERSATION ID: $stableConversationId');
+        
         final stream = _chatService.streamChat(
           modelForApi,
           apiMessageHistory,
           userId: _ensureValidUserId(),
-          conversationId: _currentConversationId,
+          conversationId: stableConversationId,
           temperature: temperature,
           maxTokens: maxTokens,
         );
@@ -698,49 +786,37 @@ class ChatProvider with ChangeNotifier {
     notifyListeners(); // Notify UI about reset and loading state
 
     List<ConversationSummary>? fetchedList;
-    ConversationSummary? conversationToUse;
 
     try {
-      // 1. Fetch existing conversations FIRST
+      // Fetch existing conversations
       fetchedList = await _fetchConversationListInternal(); 
 
-      // 2. Check if the most recent conversation is empty (using title)
-      if (fetchedList != null && fetchedList.isNotEmpty && fetchedList.first.title == "New Conversation") {
-         // 3a. Reuse the existing empty conversation
-         conversationToUse = fetchedList.first;
-         _currentConversationId = conversationToUse.id;
-         _messages = []; // Ensure messages are clear for reused empty convo
-         resetTokenAndCostTracking(); 
-         debugPrint('[ChatProvider setUserId] Reusing existing empty conversation: $_currentConversationId');
-         // No need to call _createBackendConversation
-      } else {
-         // 3b. Create a new conversation if no suitable one exists
-         debugPrint('[ChatProvider setUserId] No suitable empty conversation found, creating new one...');
-         conversationToUse = await _createBackendConversation(); // Creates, sets _currentConversationId, clears messages
-         if (conversationToUse == null) {
-            throw Exception("Failed to create initial conversation.");
-         }
-         debugPrint('[ChatProvider setUserId] Created new conversation: $_currentConversationId');
+      // Clean up any temporary conversations that might exist in the fetched list
+      if (fetchedList != null) {
+        fetchedList.removeWhere((c) => _isTemporaryConversationId(c.id));
       }
 
-      // 4. Populate the conversation list for the UI
-      // Ensure the conversation being used is at the top, followed by others.
-      _conversationList = [
-        if (conversationToUse != null) conversationToUse, // Add the active one (reused or new)
-        ...?fetchedList?.where((c) => c.id != conversationToUse?.id), // Add others from fetched list, excluding the one we're using
-      ];
-      // Sort again to be sure, especially if fetchedList was null or empty initially
-      _conversationList.sort((a, b) => b.updatedAt.compareTo(a.updatedAt)); 
-
+      // Populate the conversation list for the UI
+      if (fetchedList != null && fetchedList.isNotEmpty) {
+        _conversationList = fetchedList;
+        // Sort to ensure newest first
+        _conversationList.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+        
+        // If we have conversations, set the most recent one as current
+        _currentConversationId = _conversationList.first.id;
+        // Load messages for this conversation
+        _messages = await _chatService.getConversationMessages(_currentConversationId!, userId: userId);
+      }
+      
       _error = null; // Clear error on success
 
     } catch (e) {
-       debugPrint('[ChatProvider setUserId] Error during conversation setup: $e');
-       _error = 'Failed to initialize conversations.';
-       _conversationList = []; // Clear list on error
-       _currentConversationId = null;
-       _messages = [];
-       resetTokenAndCostTracking();
+      debugPrint('[ChatProvider setUserId] Error during conversation setup: $e');
+      _error = 'Failed to initialize conversations.';
+      _conversationList = []; // Clear list on error
+      _currentConversationId = null;
+      _messages = [];
+      resetTokenAndCostTracking();
     } finally {
       _isLoadingConversations = false; 
       notifyListeners(); // Notify UI with the final list and state
@@ -748,21 +824,36 @@ class ChatProvider with ChangeNotifier {
     }
   }
 
-  // New method for UI button press: Creates backend conversation AND updates UI state
+  // New method for UI button press: Updates UI state but delays backend conversation creation
   Future<void> requestNewConversation() async {
-    final placeholder = await _createBackendConversation(); // Create backend conversation & get placeholder
-    if (placeholder != null) {
-      // Clear local messages and costs for the new conversation
-      _messages.clear();
-      resetTokenAndCostTracking();
-      // Prepend placeholder to the list and notify UI
-      _conversationList.removeWhere((c) => c.id == placeholder.id); // Remove potential duplicate if backend was fast
-      _conversationList.insert(0, placeholder);
-      _conversationList.sort((a, b) => b.updatedAt.compareTo(a.updatedAt)); // Ensure sort order
-      // _currentConversationId is already set by _createBackendConversation
-      notifyListeners(); // Update list UI and selection
-    }
-    // If _createBackendConversation failed, error state is already set and notified
+    // Clear local state first
+    _messages.clear();
+    resetTokenAndCostTracking();
+    
+    // Create a placeholder for UI only - no backend call yet
+    final tempId = "temp_conv_placeholder_${DateTime.now().millisecondsSinceEpoch}";
+    
+    final placeholder = ConversationSummary(
+      id: tempId, 
+      title: "New Conversation",
+      updatedAt: DateTime.now(),
+    );
+    
+    // Set this as the current conversation ID
+    _currentConversationId = tempId;
+    
+    // Remove any existing placeholder conversations that might have been abandoned
+    _conversationList.removeWhere((c) => _isTemporaryConversationId(c.id));
+    
+    // Update conversation list for UI
+    _conversationList.insert(0, placeholder);
+    _conversationList.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    
+    // Notify UI about the new state
+    notifyListeners();
+    
+    debugPrint('Created temporary conversation placeholder: $tempId');
+    // The actual conversation will be created in sendMessage when the user sends their first message
   }
 
   // Create a new conversation (UI Action) - Deprecated, use requestNewConversation
@@ -1004,4 +1095,47 @@ class ChatProvider with ChangeNotifier {
     }
   }
   // --- End New Method ---
+
+  // --- New Method: Delete All Conversations ---
+  Future<bool> deleteAllConversations() async {
+    if (_currentUserId == null) {
+      setError('Cannot delete conversations: User not logged in.');
+      return false;
+    }
+
+    _isLoadingConversations = true; // Use conversation loading flag
+    _error = null;
+    notifyListeners();
+
+    try {
+      final result = await _chatService.deleteAllConversations();
+      debugPrint('Deleted all conversations: ${result['message']}');
+
+      // Clear local state
+      _conversationList.clear();
+      _messages.clear();
+      _currentConversationId = null;
+      resetTokenAndCostTracking();
+
+      // After deleting all, we need a new conversation to exist
+      await setUserId(_currentUserId!, username: _currentUserName, name: _currentDisplayName); // Re-initialize user state
+
+      _isLoadingConversations = false;
+      notifyListeners(); // Notify about cleared list and new state
+      return true; // Indicate success
+
+    } catch (e) {
+      _isLoadingConversations = false;
+      setError('Failed to delete all conversations: $e');
+      // Don't clear list on error, just notify about the error
+      notifyListeners();
+      return false; // Indicate failure
+    }
+  }
+  // --- End New Method ---
+
+  // Helper method to check if a conversation ID is temporary
+  bool _isTemporaryConversationId(String? conversationId) {
+    return conversationId != null && conversationId.startsWith("temp_");
+  }
 }

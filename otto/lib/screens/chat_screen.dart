@@ -12,6 +12,7 @@ import '../widgets/message_input.dart';
 import '../widgets/model_selector.dart';
 import '../widgets/side_panel.dart';
 import '../screens/model_management_screen.dart';
+import '../screens/settings_screen.dart'; // Import the new settings screen
 import '../widgets/token_window_visualization.dart';
 import '../config/env_config.dart';
 
@@ -76,6 +77,12 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     ));
 
     _scrollController.addListener(_handleScroll);
+    
+    // Listen for conversation changes to focus the input
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final chatProvider = Provider.of<ChatProvider>(context, listen: false);
+      chatProvider.addListener(_handleConversationChange);
+    });
   }
 
   void _handleScroll() {
@@ -107,10 +114,13 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
   @override
   void dispose() {
-    _scrollController.removeListener(_handleScroll);
+    final chatProvider = Provider.of<ChatProvider>(context, listen: false);
+    chatProvider.removeListener(_handleConversationChange);
     _shimmerController.dispose();
     _scrollButtonController.dispose();
+    _scrollController.dispose();
     _inputFocusNode.dispose();
+    _messageController.dispose();
     super.dispose();
   }
 
@@ -119,8 +129,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final chatProvider = context.read<ChatProvider>();
     await chatProvider.initialize();
     
-    // REMOVED: Explicitly prepare a conversation. This should now be handled by setUserId.
-    // await chatProvider.prepareConversation(); 
+    // Focus the input field if a conversation exists
+    if (chatProvider.conversationId != null) {
+      _focusInputField();
+    }
   }
 
   Future<void> _loadSavedStates() async {
@@ -232,8 +244,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                           child: _isSidePanelExpanded 
                               ? SidePanel(
                                   onNewChat: () {
-                                    chatProvider.clearChat();
-                                    chatProvider.resetTokenAndCostTracking();
+                                    // Focus the input field when a new conversation is created
+                                    _focusInputField();
                                   },
                                   onToggle: _toggleSidePanel,
                                   isExpanded: _isSidePanelExpanded,
@@ -415,19 +427,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           IconButton(
             icon: const Icon(Icons.settings),
             onPressed: () {
-              // Navigate to settings screen directly if route doesn't exist
+              // Navigate to the actual SettingsScreen
               Navigator.push(
                 context,
-                MaterialPageRoute(
-                  builder: (context) => Scaffold(
-                    appBar: AppBar(
-                      title: const Text('Settings'),
-                    ),
-                    body: const Center(
-                      child: Text('Settings page coming soon'),
-                    ),
-                  ),
-                ),
+                MaterialPageRoute(builder: (context) => const SettingsScreen()),
               );
             },
             tooltip: 'Settings',
@@ -1105,5 +1108,26 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         );
       },
     );
+  }
+
+  // Focus input when conversation changes
+  void _handleConversationChange() {
+    final chatProvider = Provider.of<ChatProvider>(context, listen: false);
+    // Check if the current conversation is new or temporary
+    if (chatProvider.conversationId != null && 
+        chatProvider.conversationId!.startsWith("temp_")) {
+      // Focus the input field for new conversations
+      _focusInputField();
+    }
+  }
+  
+  // Expose method to focus the input field
+  void _focusInputField() {
+    // Delay focus to ensure UI is ready
+    Future.delayed(const Duration(milliseconds: 100), () {
+      if (mounted && _inputFocusNode.canRequestFocus) {
+        _inputFocusNode.requestFocus();
+      }
+    });
   }
 }

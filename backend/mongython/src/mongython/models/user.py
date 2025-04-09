@@ -85,6 +85,21 @@ class User(BaseDocument):
             logger.error(f"Password verification failed: {e}")
             return False
 
+    async def set_password(self, new_password: str):
+        """Set a new password, hashing it before saving."""
+        if not new_password or len(new_password) < 8: # Example: enforce minimum length
+            raise ValueError("Password must be at least 8 characters long")
+        try:
+            salt = bcrypt.gensalt()
+            hashed = bcrypt.hashpw(new_password.encode(), salt)
+            self.hashed_password = hashed.decode()
+            self.updated_at = datetime.now() # Update timestamp
+            await self.save() # Save the change immediately
+            logger.info(f"Password updated for user {self.username}")
+        except Exception as e:
+            logger.error(f"Failed to set new password for user {self.username}: {e}")
+            raise ValueError(f"Failed to set new password: {e}")
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert user to a dictionary for API responses."""
         return {

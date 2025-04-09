@@ -513,8 +513,11 @@ class _SidePanelState extends State<SidePanel> with TickerProviderStateMixin {
         onPressed: () {
           HapticFeedback.lightImpact();
           chatProvider.requestNewConversation(); // Use the new method
-          // Optionally close the panel if needed
-          // widget.onToggle();
+          
+          // Call the onNewChat callback if provided
+          if (widget.onNewChat != null) {
+            widget.onNewChat!();
+          }
         },
       ),
     );
