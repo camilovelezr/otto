@@ -129,7 +129,7 @@ class ThemeProvider extends ChangeNotifier {
     final baseColor = isDark ? Colors.white : const Color(0xFF1A1A2E);
     return TextTheme(
       displayLarge: TextStyle(
-        fontFamily: 'Inter',
+        fontFamily: 'Roboto',
         fontSize: 24,
         fontWeight: FontWeight.bold,
         color: baseColor,
@@ -137,7 +137,7 @@ class ThemeProvider extends ChangeNotifier {
         height: 1.2,
       ),
       displayMedium: TextStyle(
-        fontFamily: 'Inter',
+        fontFamily: 'Roboto',
         fontSize: 18,
         fontWeight: FontWeight.bold,
         color: baseColor,
@@ -145,15 +145,15 @@ class ThemeProvider extends ChangeNotifier {
         height: 1.3,
       ),
       bodyLarge: TextStyle(
-        fontFamily: 'Inter',
-        fontSize: 16,
+        fontFamily: 'Roboto',
+        fontSize: 18,
         color: baseColor.withOpacity(0.9),
         height: 1.5,
         letterSpacing: 0.1,
       ),
       bodyMedium: TextStyle(
-        fontFamily: 'Inter',
-        fontSize: 14,
+        fontFamily: 'Roboto',
+        fontSize: 16,
         color: baseColor.withOpacity(0.9),
         height: 1.5,
         letterSpacing: 0.1,
@@ -169,7 +169,7 @@ class ThemeProvider extends ChangeNotifier {
       backgroundColor: isDark ? const Color(0xFF212121) : Colors.white,
       surfaceTintColor: Colors.transparent,
       titleTextStyle: TextStyle(
-        fontFamily: 'Inter',
+        fontFamily: 'Roboto',
         fontSize: 24,
         fontWeight: FontWeight.bold,
         color: baseColor,
@@ -189,8 +189,8 @@ class ThemeProvider extends ChangeNotifier {
           borderRadius: BorderRadius.circular(16),
         ),
         textStyle: const TextStyle(
-          fontFamily: 'Inter',
-          fontSize: 16,
+          fontFamily: 'Roboto',
+          fontSize: 18,
           fontWeight: FontWeight.bold,
           letterSpacing: 0.5,
         ),
@@ -223,7 +223,8 @@ class ThemeProvider extends ChangeNotifier {
       ),
       contentPadding: EdgeInsets.all(AppSpacing.inlineSpacing * 2),
       hintStyle: TextStyle(
-        fontFamily: 'Inter',
+        fontFamily: 'Roboto',
+        fontSize: 16,
         color: (isDark ? Colors.white : const Color(0xFF1A1A2E)).withOpacity(0.5),
       ),
     );
@@ -245,9 +246,9 @@ class ThemeProvider extends ChangeNotifier {
     return SnackBarThemeData(
       backgroundColor: isDark ? const Color(0xFF60A5FA) : _primaryGradient[0],
       contentTextStyle: const TextStyle(
-        fontFamily: 'Inter',
+        fontFamily: 'Roboto',
         color: Colors.white,
-        fontSize: 14,
+        fontSize: 16,
         fontWeight: FontWeight.w500,
       ),
       behavior: SnackBarBehavior.floating,

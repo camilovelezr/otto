@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/rendering.dart'; // Add import for ScrollDirection
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:ui';
@@ -15,6 +16,280 @@ import '../screens/model_management_screen.dart';
 import '../screens/settings_screen.dart'; // Import the new settings screen
 import '../widgets/token_window_visualization.dart';
 import '../config/env_config.dart';
+import 'dart:async';
+
+// Dedicated class to manage scroll behavior
+class ChatScrollManager {
+  final ScrollController controller;
+  bool _isAutoScrollEnabled = true;
+  bool _userScrolling = false;
+  DateTime? _lastUserScroll;
+  static const Duration _userScrollTimeout = Duration(seconds: 3);
+
+  ChatScrollManager() : controller = ScrollController();
+
+  void initialize() {
+    controller.addListener(_handleScroll);
+  }
+
+  void dispose() {
+    controller.removeListener(_handleScroll);
+    controller.dispose();
+  }
+
+  void _handleScroll() {
+    if (!controller.hasClients) return;
+    
+    // Track user scrolling more reliably
+    final ScrollPosition position = controller.position;
+    
+    // Consider it user scrolling when not at bottom and moving
+    if (position.userScrollDirection != ScrollDirection.idle) {
+      _userScrolling = true;
+      _lastUserScroll = DateTime.now();
+      
+      // Only disable auto-scroll when scrolling away from bottom
+      if (position.userScrollDirection == ScrollDirection.forward) {
+        debugPrint("User scrolled up - disabling auto-scroll");
+        _isAutoScrollEnabled = false;
+      }
+    }
+    
+    // Check if we've scrolled back to the bottom
+    if (!_isAutoScrollEnabled && _isAtBottom) {
+      debugPrint("Reached bottom - re-enabling auto-scroll");
+      _isAutoScrollEnabled = true;
+    }
+  }
+
+  // Check if we're at the bottom of the list
+  bool get _isAtBottom {
+    if (!controller.hasClients) return true;
+    
+    final position = controller.position;
+    // Consider "at bottom" if within 20 pixels of bottom
+    return position.pixels >= (position.maxScrollExtent - 20);
+  }
+
+  bool get shouldAutoScroll {
+    // If auto-scroll is disabled by user action, don't auto-scroll
+    if (!_isAutoScrollEnabled) return false;
+    
+    // If we're near bottom or no clients yet, allow auto-scroll
+    if (!controller.hasClients) return true;
+    
+    return _isAtBottom;
+  }
+
+  void scrollToBottom({bool animate = true}) {
+    if (!controller.hasClients) return;
+    
+    try {
+      // Skip if user is actively scrolling
+      if (_userScrolling && 
+          _lastUserScroll != null && 
+          DateTime.now().difference(_lastUserScroll!) < _userScrollTimeout) {
+        debugPrint("User is actively scrolling - skip auto-scroll");
+        return;
+      }
+      
+      final position = controller.position;
+      final maxScroll = position.maxScrollExtent;
+      
+      // Use simpler animation for smoother effect
+      if (animate) {
+        controller.animateTo(
+          maxScroll,
+          duration: const Duration(milliseconds: 150),
+          curve: Curves.easeOut,
+        );
+      } else {
+        controller.jumpTo(maxScroll);
+      }
+    } catch (e) {
+      debugPrint('Error scrolling: $e');
+    }
+  }
+
+  void reset() {
+    _isAutoScrollEnabled = true;
+    _userScrolling = false;
+    _lastUserScroll = null;
+    debugPrint("Scroll manager reset");
+  }
+}
+
+// Custom scrollbar thumb widget with fixed size
+class CustomScrollbarThumb extends StatefulWidget {
+  final ScrollController scrollController;
+  final double thickness;
+  final Color color;
+  final double height;
+  final double minThumbLength;
+
+  const CustomScrollbarThumb({
+    Key? key,
+    required this.scrollController,
+    this.thickness = 6.0,
+    required this.color,
+    this.height = 60.0,
+    this.minThumbLength = 60.0,
+  }) : super(key: key);
+
+  @override
+  State<CustomScrollbarThumb> createState() => _CustomScrollbarThumbState();
+}
+
+class _CustomScrollbarThumbState extends State<CustomScrollbarThumb> {
+  bool _isDragging = false;
+  bool _isHovering = false;
+  bool _isScrolling = false;
+  DateTime _lastScrollUpdate = DateTime.now();
+  Timer? _scrollVisibilityTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.scrollController.addListener(_handleScrollChange);
+  }
+
+  @override
+  void dispose() {
+    widget.scrollController.removeListener(_handleScrollChange);
+    _scrollVisibilityTimer?.cancel();
+    super.dispose();
+  }
+
+  void _handleScrollChange() {
+    final now = DateTime.now();
+    setState(() {
+      _isScrolling = true;
+      _lastScrollUpdate = now;
+    });
+
+    // Hide scrollbar after 1.5 seconds of inactivity
+    _scrollVisibilityTimer?.cancel();
+    _scrollVisibilityTimer = Timer(const Duration(milliseconds: 1500), () {
+      if (mounted && !_isDragging && !_isHovering) {
+        setState(() {
+          _isScrolling = false;
+        });
+      }
+    });
+  }
+
+  void _startDrag(DragStartDetails details) {
+    setState(() {
+      _isDragging = true;
+    });
+  }
+
+  void _endDrag(DragEndDetails details) {
+    setState(() {
+      _isDragging = false;
+    });
+    
+    // If we're not hovering, schedule hiding the scrollbar
+    if (!_isHovering) {
+      _scrollVisibilityTimer?.cancel();
+      _scrollVisibilityTimer = Timer(const Duration(milliseconds: 1500), () {
+        if (mounted && !_isDragging && !_isHovering) {
+          setState(() {
+            _isScrolling = false;
+          });
+        }
+      });
+    }
+  }
+
+  void _updateDrag(DragUpdateDetails details) {
+    final ScrollPosition position = widget.scrollController.position;
+    final double fullExtent = position.maxScrollExtent - position.minScrollExtent;
+    
+    if (fullExtent <= 0) return;
+    
+    final RenderBox renderBox = context.findRenderObject() as RenderBox;
+    final double dragDelta = details.delta.dy;
+    final double scrollDelta = dragDelta * fullExtent / renderBox.size.height;
+    
+    widget.scrollController.jumpTo(widget.scrollController.offset + scrollDelta);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ScrollPosition position = widget.scrollController.position;
+    final double viewportDimension = position.viewportDimension;
+    final double fullExtent = position.maxScrollExtent - position.minScrollExtent;
+    
+    // Don't show scrollbar if there's nothing to scroll
+    if (fullExtent <= 0 || viewportDimension <= 0) {
+      return const SizedBox();
+    }
+    
+    // Calculate the available scroll space for the thumb to travel in
+    final double thumbLength = widget.minThumbLength;
+    final double scrollbarHeight = viewportDimension;
+    final double trackHeight = scrollbarHeight;
+    final double maxThumbOffset = trackHeight - thumbLength;
+    
+    // Calculate thumb position using the scroll position ratio
+    final double scrollPositionRatio = fullExtent > 0 ? position.pixels / fullExtent : 0.0;
+    final double thumbOffset = scrollPositionRatio * maxThumbOffset;
+    
+    // Only show the scrollbar when user is interacting or scrolling
+    final bool shouldShowScrollbar = _isDragging || _isHovering || _isScrolling;
+    
+    return Positioned(
+      right: 2.0,
+      top: 0,
+      bottom: 0,
+      width: 12.0,
+      child: MouseRegion(
+        onEnter: (_) => setState(() {
+          _isHovering = true;
+        }),
+        onExit: (_) => setState(() {
+          _isHovering = false;
+          if (!_isDragging) {
+            _scrollVisibilityTimer?.cancel();
+            _scrollVisibilityTimer = Timer(const Duration(milliseconds: 1500), () {
+              if (mounted && !_isDragging && !_isHovering) {
+                setState(() {
+                  _isScrolling = false;
+                });
+              }
+            });
+          }
+        }),
+        child: GestureDetector(
+          onVerticalDragStart: _startDrag,
+          onVerticalDragUpdate: _updateDrag,
+          onVerticalDragEnd: _endDrag,
+          child: AnimatedOpacity(
+            opacity: shouldShowScrollbar ? 1.0 : 0.0,
+            duration: const Duration(milliseconds: 200),
+            child: Container(
+              width: 12.0,
+              height: trackHeight,
+              alignment: Alignment.topRight,
+              child: Transform.translate(
+                offset: Offset(0, thumbOffset.clamp(0, maxThumbOffset)),
+                child: Container(
+                  width: widget.thickness,
+                  height: thumbLength,
+                  decoration: BoxDecoration(
+                    color: widget.color.withOpacity(_isDragging ? 1.0 : 0.6),
+                    borderRadius: BorderRadius.circular(widget.thickness / 2),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({Key? key}) : super(key: key);
@@ -24,17 +299,13 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
-  final ScrollController _scrollController = ScrollController();
+  final ChatScrollManager _scrollManager = ChatScrollManager();
   final FocusNode _inputFocusNode = FocusNode();
   bool _isSidePanelExpanded = true;
   bool _isTokenWindowVisible = true;
   static const String _sidePanelKey = 'side_panel_expanded';
   static const String _tokenWindowKey = 'token_window_visible';
   late AnimationController _shimmerController;
-  late AnimationController _scrollButtonController;
-  late Animation<double> _scrollButtonScale;
-  late Animation<double> _scrollButtonOpacity;
-  bool _showScrollToBottom = false;
   late TextEditingController _messageController;
   String _modelSearchQuery = '';
   late ChatProvider _chatProvider; // Store a reference to the ChatProvider
@@ -48,80 +319,31 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     // Get ChatProvider immediately in initState
     _chatProvider = Provider.of<ChatProvider>(context, listen: false);
     
-    // Initialize controllers first
+    // Initialize controllers
     _shimmerController = AnimationController(
       duration: const Duration(milliseconds: 1500),
       vsync: this,
     )..repeat();
-
-    _scrollButtonController = AnimationController(
-      duration: const Duration(milliseconds: 150),
-      vsync: this,
-    );
-
-    _scrollButtonScale = Tween<double>(
-      begin: 0.0,
-      end: 1.0,
-    ).animate(CurvedAnimation(
-      parent: _scrollButtonController,
-      curve: Curves.easeOut,
-      reverseCurve: Curves.easeIn,
-    ));
-
-    _scrollButtonOpacity = Tween<double>(
-      begin: 0.0,
-      end: 1.0,
-    ).animate(CurvedAnimation(
-      parent: _scrollButtonController,
-      curve: Curves.easeOut,
-    ));
-
-    _scrollController.addListener(_handleScroll);
+    
+    // Initialize scroll manager
+    _scrollManager.initialize();
     
     // Set up other providers and listeners post-frame
     WidgetsBinding.instance.addPostFrameCallback((_) {
       // Add listener first
-      _chatProvider.addListener(_handleConversationChange);
+      _chatProvider.addListener(_handleChatUpdate);
       
       // Initialize chat in the background
       _initializeChat();
     });
   }
 
-  void _handleScroll() {
-    if (!_scrollController.hasClients) return;
-    _updateScrollButtonVisibility();
-  }
-
-  void _updateScrollButtonVisibility() {
-    if (!_scrollController.hasClients) return;
-    
-    final position = _scrollController.position;
-    final maxScroll = position.maxScrollExtent;
-    final currentScroll = position.pixels;
-    
-    // Show button if we're not at the bottom
-    final showButton = currentScroll < maxScroll - 10;
-    
-    if (showButton != _showScrollToBottom) {
-      setState(() {
-        _showScrollToBottom = showButton;
-      });
-      if (showButton) {
-        _scrollButtonController.forward(from: 0);
-      } else {
-        _scrollButtonController.reverse();
-      }
-    }
-  }
-
   @override
   void dispose() {
     // Use the stored reference instead of Provider.of
-    _chatProvider.removeListener(_handleConversationChange);
+    _chatProvider.removeListener(_handleChatUpdate);
     _shimmerController.dispose();
-    _scrollButtonController.dispose();
-    _scrollController.dispose();
+    _scrollManager.dispose();
     _inputFocusNode.dispose();
     _messageController.dispose();
     super.dispose();
@@ -172,38 +394,22 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     });
   }
 
-  void _scrollToBottom() {
-    if (!_scrollController.hasClients) return;
+  void _handleChatUpdate() {
+    setState(() {});
     
-    _scrollController.animateTo(
-      _scrollController.position.maxScrollExtent,
-      duration: const Duration(milliseconds: 300),
-      curve: Curves.linear,
-    );
+    // Check if there are messages and if we need to scroll
+    if (_chatProvider.messages.isNotEmpty && _scrollManager.shouldAutoScroll) {
+      // Use a short delay to ensure proper UI update before scrolling
+      Future.delayed(const Duration(milliseconds: 50), () {
+        if (mounted) {
+          _scrollManager.scrollToBottom(animate: !_chatProvider.isLoading);
+        }
+      });
+    }
+  }
+
+  void _focusInputField() {
     _inputFocusNode.requestFocus();
-  }
-
-  void _scrollToShowNewMessage() {
-    if (!_scrollController.hasClients) return;
-    
-    // First jump to bottom to ensure message is rendered
-    _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
-    
-    // Then do a small animation to give visual feedback
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scrollController.hasClients) return;
-      
-      _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 100),
-        curve: Curves.linear,
-      );
-    });
-  }
-
-  double _calculateMessageSpacing(bool isNewUserMessage) {
-    // Not needed anymore since we're using reverse: true
-    return 0;
   }
 
   @override
@@ -237,7 +443,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   Row(
                     children: [
                       // Side panel with animated container
-                      ClipRect( // Restore ClipRect
+                      ClipRect(
                         child: AnimatedContainer(
                           duration: const Duration(milliseconds: 300),
                           curve: Curves.easeOutCubic,
@@ -295,9 +501,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                       ),
                     ],
                   ),
-                  
-                  // Scroll to bottom button
-                  _buildScrollToBottomButton(),
                   
                   // Error message
                   if (_chatProvider.error != null)
@@ -423,21 +626,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
   Widget _buildMessagesList(ChatProvider chatProvider) {
     var messages = chatProvider.messages;
-    final topPadding = MediaQuery.of(context).padding.top;
-    final bottomPadding = MediaQuery.of(context).padding.bottom;
-    final viewportHeight = MediaQuery.of(context).size.height;
-
-    // Update scroll button visibility and scroll to new messages
-    if (mounted && _scrollController.hasClients) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _updateScrollButtonVisibility();
-        
-        // Only scroll for new user messages, not for streaming responses
-        if (messages.isNotEmpty && messages.last.isUser) {
-          _scrollToShowNewMessage();
-        }
-      });
-    }
+    final theme = Theme.of(context);
 
     return Stack(
       children: [
@@ -454,45 +643,70 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           opacity: messages.isEmpty ? 0.0 : 1.0,
           child: IgnorePointer(
             ignoring: messages.isEmpty,
-            child: ClipRect(
-              child: ListView.builder(
-                key: const ValueKey('messages_list'),
-                controller: _scrollController,
-                padding: EdgeInsets.only(
-                  top: 8,
-                  bottom: MediaQuery.of(context).padding.bottom + 15,
-                ),
-                physics: const ClampingScrollPhysics(),
-                reverse: false,
-                itemCount: messages.length,
-                itemBuilder: (context, index) {
-                  final message = messages[index];
-                  final isLastMessage = index == messages.length - 1;
-                  final isStreaming = isLastMessage && chatProvider.isLoading;
-
-                  // Debug logging for streaming state
-                  if (isLastMessage && isStreaming) {
-                    debugPrint('Rendering streaming message - Content length: ${message.content?.length ?? 0}');
-                  }
-
-                  // Ensure we scroll to bottom for streaming messages
-                  if (isLastMessage && isStreaming) {
-                    WidgetsBinding.instance.addPostFrameCallback((_) {
-                      if (_scrollController.hasClients) {
-                        _scrollController.jumpTo(
-                          _scrollController.position.maxScrollExtent,
-                        );
-                      }
-                    });
-                  }
-
-                  return ChatMessageWidget(
-                    key: ValueKey('${message.id}_${message.content?.length ?? 0}_${isStreaming ? DateTime.now().millisecondsSinceEpoch : ''}'),
-                    message: message,
-                  );
-                },
-              ),
-            ),
+            child: LayoutBuilder(builder: (context, constraints) {
+              return Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  // Main scrollable content with stabilized layout
+                  Container(
+                    width: constraints.maxWidth,
+                    child: NotificationListener<ScrollNotification>(
+                      // Handle scroll notifications to update the scroll manager
+                      onNotification: (notification) {
+                        // Only process user-driven scrolls
+                        if (notification is ScrollUpdateNotification && 
+                            notification.dragDetails != null) {
+                          // Update user scrolling state
+                          _scrollManager._userScrolling = true;
+                          _scrollManager._lastUserScroll = DateTime.now();
+                        }
+                        return false;
+                      },
+                      child: ScrollConfiguration(
+                        // Remove default scrollbar
+                        behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+                        child: ListView.builder(
+                          key: const ValueKey('messages_list'),
+                          controller: _scrollManager.controller,
+                          padding: EdgeInsets.only(
+                            top: 8,
+                            bottom: MediaQuery.of(context).padding.bottom + 15,
+                            right: 12.0, // Right padding for scrollbar space
+                          ),
+                          physics: const ClampingScrollPhysics(),
+                          reverse: false,
+                          addRepaintBoundaries: true,
+                          cacheExtent: 1000,
+                          itemCount: messages.length,
+                          itemBuilder: (context, index) {
+                            final message = messages[index];
+                            
+                            return RepaintBoundary(
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 2.0, vertical: 1.0),
+                                child: ChatMessageWidget(
+                                  key: ValueKey('msg_${message.id}'),
+                                  message: message,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  ),
+                  
+                  // Custom fixed-size scrollbar thumb
+                  CustomScrollbarThumb(
+                    scrollController: _scrollManager.controller,
+                    color: theme.colorScheme.primary,
+                    thickness: 6.0,
+                    height: 60.0,
+                    minThumbLength: 60.0,
+                  ),
+                ],
+              );
+            }),
           ),
         ),
       ],
@@ -567,8 +781,9 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                       // Now send the message with a valid conversation ID
                       chatProvider.addUserMessage(content);
                       
-                      // Immediately scroll after user message is added
-                      _scrollToShowNewMessage();
+                      // Reset scroll manager and scroll to bottom when user sends message
+                      _scrollManager.reset();
+                      _scrollManager.scrollToBottom(animate: true);
                     },
                     isLoading: chatProvider.isLoading,
                     focusNode: focusNode,
@@ -620,74 +835,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
             label: Text(hasModels ? 'Select' : 'Retry'),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildScrollToBottomButton() {
-    return Positioned(
-      left: 0,
-      right: 0,
-      bottom: 0,
-      child: Center(
-        child: AnimatedBuilder(
-          animation: _scrollButtonController,
-          builder: (context, child) {
-            return Opacity(
-              opacity: _scrollButtonOpacity.value,
-              child: Transform.scale(
-                scale: _scrollButtonScale.value,
-                child: child,
-              ),
-            );
-          },
-          child: Padding(
-            padding: const EdgeInsets.only(bottom: 16),
-            child: Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    Theme.of(context).colorScheme.primary,
-                    Color.lerp(Theme.of(context).colorScheme.primary, Theme.of(context).colorScheme.secondary, 0.25)!,
-                    Color.lerp(Theme.of(context).colorScheme.primary, Theme.of(context).colorScheme.secondary, 0.5)!,
-                    Color.lerp(Theme.of(context).colorScheme.primary, Theme.of(context).colorScheme.secondary, 0.75)!,
-                    Theme.of(context).colorScheme.secondary,
-                  ],
-                  stops: const [0.0, 0.25, 0.5, 0.75, 1.0],
-                ),
-                borderRadius: BorderRadius.circular(24),
-                boxShadow: [
-                  BoxShadow(
-                    color: Theme.of(context).colorScheme.primary.withOpacity(0.12),
-                    blurRadius: 16,
-                    offset: const Offset(0, 4),
-                    spreadRadius: -2,
-                  ),
-                ],
-              ),
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: () {
-                    HapticFeedback.lightImpact();
-                    _scrollToBottom();
-                  },
-                  borderRadius: BorderRadius.circular(24),
-                  child: Container(
-                    padding: const EdgeInsets.all(8),
-                    child: const Icon(
-                      Icons.arrow_downward_rounded,
-                      color: Colors.white,
-                      size: 16,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
       ),
     );
   }
@@ -798,8 +945,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   ),
                 ),
               ],
-              
-              // Removed the AI Service Status box as requested
             ],
           ),
         ),
@@ -1079,25 +1224,5 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         );
       },
     );
-  }
-
-  // Focus input when conversation changes
-  void _handleConversationChange() {
-    // Check if the current conversation is new or temporary
-    if (_chatProvider.conversationId != null && 
-        _chatProvider.conversationId!.startsWith("temp_")) {
-      // Focus the input field for new conversations
-      _focusInputField();
-    }
-  }
-  
-  // Expose method to focus the input field
-  void _focusInputField() {
-    // Delay focus to ensure UI is ready
-    Future.delayed(const Duration(milliseconds: 100), () {
-      if (mounted && _inputFocusNode.canRequestFocus) {
-        _inputFocusNode.requestFocus();
-      }
-    });
   }
 }

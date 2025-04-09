@@ -60,12 +60,5 @@ flutter:
     - assets/images/
     - .env
 
-  fonts:
-    - family: Inter
-      fonts:
-        - asset: assets/fonts/Inter-Regular.ttf
-          weight: 400
-        - asset: assets/fonts/Inter-Medium.ttf
-          weight: 500
-        - asset: assets/fonts/Inter-Bold.ttf
-          weight: 700
+  # Fonts are now being loaded from Google Fonts
+  # No need to maintain local font files

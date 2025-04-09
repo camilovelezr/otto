@@ -83,7 +83,7 @@ class MyApp extends StatelessWidget {
             theme: themeProvider.currentTheme.copyWith(
               platform: TargetPlatform.macOS,
               scaffoldBackgroundColor: Colors.white,
-              textTheme: GoogleFonts.notoSansTextTheme( // Apply Noto Sans font
+              textTheme: GoogleFonts.robotoTextTheme(
                 themeProvider.currentTheme.textTheme,
               ),
               colorScheme: themeProvider.currentTheme.colorScheme.copyWith(
@@ -94,8 +94,11 @@ class MyApp extends StatelessWidget {
             darkTheme: themeProvider.currentTheme.copyWith(
               platform: TargetPlatform.macOS,
               scaffoldBackgroundColor: const Color(0xFF121212),
-              textTheme: GoogleFonts.notoSansTextTheme( // Apply Noto Sans font
-                themeProvider.currentTheme.textTheme.apply(bodyColor: Colors.white, displayColor: Colors.white), // Ensure text is visible in dark mode
+              textTheme: GoogleFonts.robotoTextTheme(
+                themeProvider.currentTheme.textTheme.apply(
+                  bodyColor: Colors.white, 
+                  displayColor: Colors.white
+                ),
               ),
               colorScheme: themeProvider.currentTheme.colorScheme.copyWith(
                 background: const Color(0xFF121212),
