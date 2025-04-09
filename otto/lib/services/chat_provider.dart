@@ -286,11 +286,7 @@ class ChatProvider with ChangeNotifier {
     int removedCount = 0;
     
     // Remove any conversations with temporary IDs from the list
-    _conversationList.removeWhere((c) {
-      bool isTemp = _isTemporaryConversationId(c.id);
-      if (isTemp) removedCount++;
-      return isTemp;
-    });
+    _conversationList.removeWhere((c) => _isTemporaryConversationId(c.id));
     
     if (removedCount > 0) {
       debugPrint('Cleaned up $removedCount abandoned temporary conversation(s)');
@@ -920,7 +916,7 @@ class ChatProvider with ChangeNotifier {
 
       // --- Trigger Summarization Logic ---
       debugPrint('Finalize Assistant: Message count = ${_messages.length}, Current Conv ID = $_currentConversationId');
-      if (_messages.length == 4 && _currentConversationId != null) {
+      if (_messages.length == 2 && _currentConversationId != null) {
         debugPrint('Finalize Assistant: Checking condition for summarization trigger.');
         // Directly call _triggerSummarization, which now awaits the completer internally
         _triggerSummarization(); 
@@ -999,12 +995,12 @@ class ChatProvider with ChangeNotifier {
     await _userIdSetupCompleter?.future; 
     
     debugPrint('_triggerSummarization called.');
-    if (_currentConversationId == null || _messages.length < 4) {
+    if (_currentConversationId == null || _messages.length < 2) {
       debugPrint('_triggerSummarization: Conditions not met (ConvID: $_currentConversationId, Msg Count: ${_messages.length}). Bailing out.');
       return;
     }
 
-    final messagesToSummarize = _messages.sublist(0, 4);
+    final messagesToSummarize = _messages.sublist(0, 2);
 
     debugPrint('Triggering summarization for conversation $_currentConversationId');
     try {

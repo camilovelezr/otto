@@ -37,6 +37,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   bool _showScrollToBottom = false;
   late TextEditingController _messageController;
   String _modelSearchQuery = '';
+  late ChatProvider _chatProvider; // Store a reference to the ChatProvider
 
   @override
   void initState() {
@@ -44,11 +45,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     _messageController = TextEditingController();
     _loadSavedStates();
     
-    // Defer initialization to after the build is complete
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _initializeChat();
-    });
+    // Get ChatProvider immediately in initState
+    _chatProvider = Provider.of<ChatProvider>(context, listen: false);
     
+    // Initialize controllers first
     _shimmerController = AnimationController(
       duration: const Duration(milliseconds: 1500),
       vsync: this,
@@ -78,10 +78,13 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
     _scrollController.addListener(_handleScroll);
     
-    // Listen for conversation changes to focus the input
+    // Set up other providers and listeners post-frame
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final chatProvider = Provider.of<ChatProvider>(context, listen: false);
-      chatProvider.addListener(_handleConversationChange);
+      // Add listener first
+      _chatProvider.addListener(_handleConversationChange);
+      
+      // Initialize chat in the background
+      _initializeChat();
     });
   }
 
@@ -114,8 +117,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
   @override
   void dispose() {
-    final chatProvider = Provider.of<ChatProvider>(context, listen: false);
-    chatProvider.removeListener(_handleConversationChange);
+    // Use the stored reference instead of Provider.of
+    _chatProvider.removeListener(_handleConversationChange);
     _shimmerController.dispose();
     _scrollButtonController.dispose();
     _scrollController.dispose();
@@ -126,11 +129,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
   void _initializeChat() async {
     // Initialize the chat provider
-    final chatProvider = context.read<ChatProvider>();
-    await chatProvider.initialize();
+    await _chatProvider.initialize();
     
     // Focus the input field if a conversation exists
-    if (chatProvider.conversationId != null) {
+    if (_chatProvider.conversationId != null) {
       _focusInputField();
     }
   }
@@ -206,7 +208,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    final chatProvider = Provider.of<ChatProvider>(context);
     final themeProvider = Provider.of<ThemeProvider>(context);
     final isDarkMode = themeProvider.isDarkMode;
     final authProvider = Provider.of<AuthProvider>(context);
@@ -218,13 +219,13 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         child: Column(
           children: [
             // Token usage visualization
-            if (_isTokenWindowVisible && chatProvider.totalTokens > 0)
+            if (_isTokenWindowVisible && _chatProvider.totalTokens > 0)
               TokenWindowVisualization(
-                totalTokens: chatProvider.totalTokens,
-                inputTokens: chatProvider.totalInputTokens,
-                outputTokens: chatProvider.totalOutputTokens,
-                model: chatProvider.selectedModel,
-                totalCost: chatProvider.totalCost,
+                totalTokens: _chatProvider.totalTokens,
+                inputTokens: _chatProvider.totalInputTokens,
+                outputTokens: _chatProvider.totalOutputTokens,
+                model: _chatProvider.selectedModel,
+                totalCost: _chatProvider.totalCost,
               ),
             
             // Main chat area
@@ -278,7 +279,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                               
                               // Messages list
                               Expanded(
-                                child: _buildMessagesList(chatProvider),
+                                child: _buildMessagesList(_chatProvider),
                               ),
                               
                               // Message input
@@ -286,7 +287,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                                 padding: EdgeInsets.only(
                                   bottom: MediaQuery.of(context).viewPadding.bottom,
                                 ),
-                                child: _buildMessageInput(chatProvider, isAuthenticated),
+                                child: _buildMessageInput(_chatProvider, isAuthenticated),
                               ),
                             ],
                           ),
@@ -299,35 +300,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   _buildScrollToBottomButton(),
                   
                   // Error message
-                  if (chatProvider.error != null)
-                    _buildErrorMessage(chatProvider),
-                    
-                  // Loading indicator for model reload
-                  if (chatProvider.isLoadingModels)
-                    Positioned.fill(
-                      child: Container(
-                        color: Colors.black38,
-                        child: Center(
-                          child: Card(
-                            elevation: 4,
-                            child: Padding(
-                              padding: const EdgeInsets.all(16.0),
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const CircularProgressIndicator(),
-                                  const SizedBox(height: 16),
-                                  Text(
-                                    "Loading models...",
-                                    style: Theme.of(context).textTheme.titleMedium,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
+                  if (_chatProvider.error != null)
+                    _buildErrorMessage(_chatProvider),
                 ],
               ),
             ),
@@ -338,8 +312,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   }
 
   Widget _buildAppBar(BuildContext context, bool isDarkMode) {
-    final chatProvider = Provider.of<ChatProvider>(context);
-    
     return Container(
       height: 60,
       decoration: BoxDecoration(
@@ -379,7 +351,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           const Spacer(),
 
           // Token window toggle
-          if (chatProvider.totalTokens > 0)
+          if (_chatProvider.totalTokens > 0)
             IconButton(
               icon: Icon(_isTokenWindowVisible ? Icons.analytics : Icons.analytics_outlined),
               onPressed: _toggleTokenWindow,
@@ -393,7 +365,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
               color: Colors.transparent,
               child: InkWell(
                 onTap: () {
-                  _showModelSelector(context, chatProvider);
+                  _showModelSelector(context, _chatProvider);
                 },
                 borderRadius: BorderRadius.circular(24),
                 child: Ink(
@@ -406,7 +378,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
-                        chatProvider.selectedModel?.displayName ?? 'Select Model',
+                        _chatProvider.selectedModel?.displayName ?? 'Select Model',
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                           color: Theme.of(context).colorScheme.onSurfaceVariant,
                         ),
@@ -722,11 +694,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
   Widget _buildEmptyState(BuildContext context) {
     final themeProvider = Provider.of<ThemeProvider>(context);
-    final chatProvider = Provider.of<ChatProvider>(context);
-    final isLoading = chatProvider.isLoading;
-    final errorMessage = chatProvider.error;
-    final hasModels = chatProvider.availableModels.isNotEmpty;
-    final selectedModel = chatProvider.selectedModel;
+    final isLoading = _chatProvider.isLoading;
+    final errorMessage = _chatProvider.error;
+    final hasModels = _chatProvider.availableModels.isNotEmpty;
+    final selectedModel = _chatProvider.selectedModel;
     
     return Center(
       child: Padding(
@@ -773,7 +744,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                 )
               else
                 Text( // Personalized welcome message using display name
-                  'Hi, ${chatProvider.currentDisplayName ?? 'there'}!', // Use currentDisplayName
+                  'Hi, ${_chatProvider.currentDisplayName ?? 'there'}!', // Use currentDisplayName
                   style: Theme.of(context).textTheme.titleLarge?.copyWith(
                      fontWeight: FontWeight.w600, // Slightly bolder
                      color: Theme.of(context).colorScheme.primary, // Use primary color
@@ -1112,10 +1083,9 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
   // Focus input when conversation changes
   void _handleConversationChange() {
-    final chatProvider = Provider.of<ChatProvider>(context, listen: false);
     // Check if the current conversation is new or temporary
-    if (chatProvider.conversationId != null && 
-        chatProvider.conversationId!.startsWith("temp_")) {
+    if (_chatProvider.conversationId != null && 
+        _chatProvider.conversationId!.startsWith("temp_")) {
       // Focus the input field for new conversations
       _focusInputField();
     }
