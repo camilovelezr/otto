@@ -891,7 +891,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                 )
               else
                 Text( // Personalized welcome message using display name
-                  'Hi, ${_chatProvider.currentDisplayName ?? 'there'}!', // Use currentDisplayName
+                  'Hola, ${_chatProvider.currentDisplayName ?? 'there'}!', // Use currentDisplayName
                   style: Theme.of(context).textTheme.titleLarge?.copyWith(
                      fontWeight: FontWeight.w600, // Slightly bolder
                      color: Theme.of(context).colorScheme.primary, // Use primary color

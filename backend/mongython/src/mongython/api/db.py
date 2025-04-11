@@ -74,29 +74,15 @@ def create_mongo_client(uri, attempts=MAX_CONNECTION_ATTEMPTS):
 # Create database client with retry logic
 client = create_mongo_client(MONGO_URI)
 
-
-async def migrate_database(db):
-    """Migrate database to latest schema."""
-    logger.info("Starting database migration")
-    try:
-        # Drop the messages collection to force schema update
-        await db.drop_collection("messages")
-        logger.info("Dropped messages collection for schema update")
-        
-        # Reinitialize Beanie with new schema
-        await init_beanie(
-            database=db,
-            document_models=[User, LLMModel, Conversation, Message],
-        )
-        logger.info("Successfully migrated database schema")
-    except Exception as e:
-        logger.error(f"Failed to migrate database: {e}")
-        raise
+# Flag to track if Beanie has been initialized
+_beanie_initialized = False
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize database connection on startup and close on shutdown."""
     logger.info("Initializing database connection")
+    global _beanie_initialized
+    
     for attempt in range(1, MAX_CONNECTION_ATTEMPTS + 1):
         try:
             # Verify database connectivity before initializing Beanie
@@ -111,11 +97,24 @@ async def lifespan(app: FastAPI):
             db = db.with_options(
                 codec_options=CodecOptions(uuid_representation=UuidRepresentation.STANDARD)
             )
-
-            # Migrate database if needed
-            await migrate_database(db)
+            
+            # Initialize Beanie only if it hasn't been initialized yet
+            if not _beanie_initialized:
+                logger.info("Initializing Beanie ODM")
+                await init_beanie(
+                    database=db,
+                    document_models=[
+                        User,
+                        LLMModel,
+                        Conversation,
+                        Message
+                    ]
+                )
+                _beanie_initialized = True
+                
             logger.info("Database connection established")
-            break
+            break  # Exit the retry loop once connection is successful
+            
         except (ServerSelectionTimeoutError, ConnectionFailure) as e:
             if attempt == MAX_CONNECTION_ATTEMPTS:
                 error_message = generate_db_error_message()

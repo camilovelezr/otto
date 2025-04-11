@@ -23,7 +23,6 @@ class Conversation(BaseDocument):
 
     # Basic conversation data
     title: Optional[str] = None
-    # tags removed
 
     # Timestamps
     created_at: datetime = Field(default_factory=datetime.now)
@@ -31,8 +30,6 @@ class Conversation(BaseDocument):
 
     # Token tracking
     token_window: TokenWindowState = Field(default_factory=TokenWindowState)
-
-    # Additional metadata removed (detected_topics, summary)
 
     # Encryption fields
     encrypted_conversation_key: Optional[str] = None  # AES key encrypted with user's public key

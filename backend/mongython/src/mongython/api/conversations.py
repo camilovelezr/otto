@@ -379,9 +379,6 @@ async def update_conversation_title(
         created_at=conversation.created_at.isoformat(),
         updated_at=conversation.updated_at.isoformat(),
         token_window=conversation.token_window.model_dump(),
-        # tags=conversation.tags, # Removed
-        # detected_topics=conversation.detected_topics, # Removed
-        # summary=conversation.summary, # Removed
     )
 
 
@@ -547,15 +544,12 @@ async def add_message(
                 conversation_id=conv_uuid,
                 parent_message_id=parent_message_id,
                 model_id=message_data.model_id,
-                # is_encrypted=is_encrypted, # Removed
                 content=message_data.content, # Assign encrypted content directly
                 encrypted_key=message_data.encrypted_key,
                 iv=message_data.iv,
                 tag=message_data.tag,
                 token_count=0 # Cannot estimate tokens for encrypted
-                 # encryption_metadata=message_data.encryption_metadata # Optional
             )
-            # Removed if/else based on is_encrypted
             await message.save()
              # Update conversation token window
             conversation.token_window.update_from_message(message, is_input=False)
