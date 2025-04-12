@@ -19,58 +19,52 @@ class ChatMessageWidget extends StatelessWidget {
     final theme = Theme.of(context);
     final isDarkMode = theme.brightness == Brightness.dark;
     final bool isUserMessage = message.isUser; // Use the getter from the model
-    final alignment = isUserMessage ? CrossAxisAlignment.end : CrossAxisAlignment.start;
 
-    // Determine the highlight theme based on dark mode
     final HighlightTheme codeHighlightTheme = isDarkMode ? atomOneDarkTheme : atomOneLightTheme;
 
-    // Use existing AppColors, considering dark mode
-    final color = isUserMessage 
-        ? AppColors.primary // User message background
-        : isDarkMode ? AppColors.surfaceDark : AppColors.surfaceVariant; // Assistant message background
-    
-    final textColor = isUserMessage 
-        ? AppColors.onPrimary // User message text
-        : isDarkMode ? AppColors.onSurfaceDark : AppColors.onSurface; // Assistant message text
+    final backgroundColor = isUserMessage
+        ? isDarkMode ? AppColors.userMessageBg.withOpacity(0.3) : AppColors.userMessageBg.withOpacity(0.15)
+        : isDarkMode ? AppColors.assistantMessageBg.withOpacity(0.3) : AppColors.assistantMessageBg.withOpacity(0.15);
 
-    // Define a base text style for Markdown content
-    final baseTextStyle = theme.textTheme.bodyMedium?.copyWith(color: textColor) ?? TextStyle(color: textColor);
+    final textColor = isUserMessage
+        ? isDarkMode ? AppColors.userMessage : AppColors.userMessage
+        : isDarkMode ? AppColors.onSurfaceMedium : AppColors.onSurface;
 
-    return Container(
-      // Use existing AppSpacing values
-      margin: const EdgeInsets.symmetric(vertical: AppSpacing.listItemSpacing), 
+    final baseTextStyle = theme.textTheme.bodyLarge?.copyWith(
+      color: textColor,
+      height: 1.5,
+      letterSpacing: 0.15,
+    ) ?? TextStyle(color: textColor);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8.0),
       child: Column(
-        crossAxisAlignment: alignment,
+        crossAxisAlignment: isUserMessage ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         children: [
           Container(
-            // Use existing AppSpacing values
-            padding: const EdgeInsets.all(AppSpacing.inlineSpacing), 
-            constraints: BoxConstraints(
-              maxWidth: MediaQuery.of(context).size.width * 0.75, // Limit message width
+            padding: const EdgeInsets.symmetric(
+              horizontal: 24.0,
+              vertical: 16.0,
             ),
             decoration: BoxDecoration(
-              color: color,
-              // Use existing AppSpacing values
-              borderRadius: BorderRadius.circular(AppSpacing.inlineSpacing), 
+              color: backgroundColor,
+              borderRadius: BorderRadius.only(
+                topLeft: const Radius.circular(12),
+                topRight: const Radius.circular(12),
+                bottomLeft: Radius.circular(isUserMessage ? 12 : 4),
+                bottomRight: Radius.circular(isUserMessage ? 4 : 12),
+              ),
             ),
-            child: SelectionArea( // Make the content selectable
-              child: GptMarkdown(
-                // Display the content (should be decrypted text or placeholder from ChatService)
-                message.content ?? "[Content Unavailable]", // Simplified: removed isEncrypted check
-                // Apply the base text style. GptMarkdown will handle specific element styling internally.
-                style: baseTextStyle,
-                // Removed codeBlockBuilder as it's not supported by GptMarkdown.
-                // Code block styling is handled internally by the package.
-                // You might be able to apply a general code style via the main 'style'
-                // Pass the selected highlight theme
-                highlightTheme: codeHighlightTheme,
-
-                // You can customize other markdown elements further if needed
-                // headingStyle: {
-                //   1: baseTextStyle.copyWith(fontSize: 24, fontWeight: FontWeight.bold),
-                //   2: baseTextStyle.copyWith(fontSize: 20, fontWeight: FontWeight.bold),
-                // },
-                // codeStyle: baseTextStyle.copyWith(fontFamily: 'monospace', backgroundColor: Colors.grey.shade800),
+            child: SelectionArea(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  GptMarkdown(
+                    message.content ?? "[Content Unavailable]",
+                    style: baseTextStyle,
+                    highlightTheme: codeHighlightTheme,
+                  ),
+                ],
               ),
             ),
           ),

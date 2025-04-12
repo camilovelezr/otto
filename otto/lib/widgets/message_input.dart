@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../theme/theme_provider.dart';
 import '../theme/app_spacing.dart';
+import '../theme/app_colors.dart';
 import 'dart:ui' as ui show BoxHeightStyle, BoxWidthStyle;
 
 // Custom formatter to handle Enter key
@@ -92,19 +93,27 @@ class _MessageInputState extends State<MessageInput> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final themeProvider = context.watch<ThemeProvider>();
+    final isDarkMode = theme.brightness == Brightness.dark;
 
     return Container(
-      padding: EdgeInsets.symmetric(horizontal: AppSpacing.blockSpacing),
+      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+      decoration: BoxDecoration(
+        color: AppColors.inputBackground,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(
+          color: AppColors.inputBorder.withOpacity(0.5),
+          width: 1,
+        ),
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Expanded(
             child: TextSelectionTheme(
               data: TextSelectionThemeData(
-                selectionColor: theme.colorScheme.primary.withOpacity(0.2),
-                cursorColor: theme.colorScheme.primary,
-                selectionHandleColor: theme.colorScheme.primary,
+                selectionColor: AppColors.selection,
+                cursorColor: AppColors.primary,
+                selectionHandleColor: AppColors.selectionHandle,
               ),
               child: Focus(
                 onKeyEvent: (node, event) {
@@ -126,115 +135,59 @@ class _MessageInputState extends State<MessageInput> {
                   onChanged: (text) {
                     setState(() {});
                   },
-                  onSubmitted: (text) {
-                    // This is triggered when the user presses Enter in single line mode
-                    // or when TextInputAction.send is triggered
-                    debugPrint('TextField onSubmitted triggered');
-                    _handleSubmit();
-                  },
-                  onEditingComplete: () {
-                    // This can help with handling Enter key on some platforms
-                    _handleSubmit();
-                  },
+                  onSubmitted: (text) => _handleSubmit(),
+                  onEditingComplete: _handleSubmit,
                   onTapOutside: (event) => _focusNode.unfocus(),
                   autofocus: false,
-                  cursorWidth: 2.5,
+                  cursorWidth: 2,
                   cursorRadius: const Radius.circular(2),
-                  cursorHeight: 20,
-                  cursorColor: theme.colorScheme.primary.withOpacity(0.8),
+                  cursorHeight: 22,
                   style: theme.textTheme.bodyLarge?.copyWith(
-                    height: 1.3,
-                    fontSize: 16,
+                    fontSize: 15,
+                    height: 1.5,
+                    letterSpacing: 0.15,
+                    color: AppColors.onSurface,
                   ),
-                  // Simplified input formatters to avoid potential issues
-                  inputFormatters: [
-                    // This prevents standalone Enter keys from adding newlines
-                    // but still allows Shift+Enter and pasted text with newlines
-                    EnterKeyFormatter(),
-                  ],
+                  inputFormatters: [EnterKeyFormatter()],
                   decoration: InputDecoration(
-                    hintText: 'Type a message...',
+                    hintText: 'Message Otto',
                     hintStyle: TextStyle(
-                      color: theme.colorScheme.onSurface.withOpacity(0.5),
+                      color: AppColors.inputPlaceholder,
+                      fontSize: 15,
                     ),
-                    filled: true,
-                    fillColor: Colors.transparent,
+                    filled: false,
                     border: InputBorder.none,
                     enabledBorder: InputBorder.none,
                     focusedBorder: InputBorder.none,
-                    contentPadding: EdgeInsets.symmetric(
-                      horizontal: AppSpacing.inlineSpacing * 2,
-                      vertical: 14.0,
+                    contentPadding: const EdgeInsets.symmetric(
+                      vertical: 16.0,
                     ),
                     isDense: true,
-                    focusColor: Colors.transparent,
-                    hoverColor: Colors.transparent,
-                    // Add alignment to improve text positioning
-                    alignLabelWithHint: true,
                   ),
-                  showCursor: true,
-                  mouseCursor: SystemMouseCursors.text,
-                  enableInteractiveSelection: true,
                 ),
               ),
             ),
           ),
-          SizedBox(width: AppSpacing.inlineSpacing * 0.8),
-          GestureDetector(
-            onTap: widget.isLoading ? null : _handleSubmit,
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    theme.colorScheme.primary,
-                    Color.lerp(
-                      theme.colorScheme.primary,
-                      theme.colorScheme.secondary,
-                      0.3,
-                    )!,
-                  ],
-                ),
-                borderRadius: BorderRadius.circular(14),
-                boxShadow: [
-                  BoxShadow(
-                    color: theme.colorScheme.primary.withOpacity(0.12),
-                    blurRadius: 6,
-                    offset: const Offset(0, 2),
-                    spreadRadius: 0,
-                  ),
-                ],
-              ),
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: widget.isLoading ? null : _handleSubmit,
-                  borderRadius: BorderRadius.circular(14),
-                  child: Container(
-                    padding: const EdgeInsets.all(10),
-                    child: AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 200),
-                      child: widget.isLoading
-                          ? SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                              ),
-                            )
-                          : const Icon(
-                              Icons.send_rounded,
-                              color: Colors.white,
-                              size: 18,
-                            ),
+          IconButton(
+            onPressed: widget.isLoading ? null : _handleSubmit,
+            icon: widget.isLoading
+                ? SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        AppColors.primary.withOpacity(0.8),
+                      ),
                     ),
+                  )
+                : Icon(
+                    Icons.send_rounded,
+                    color: AppColors.primary.withOpacity(0.8),
+                    size: 20,
                   ),
-                ),
-              ),
-            ),
+            padding: const EdgeInsets.all(12),
+            visualDensity: VisualDensity.compact,
           ),
         ],
       ),
