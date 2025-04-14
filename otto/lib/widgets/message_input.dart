@@ -93,15 +93,16 @@ class _MessageInputState extends State<MessageInput> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isDarkMode = theme.brightness == Brightness.dark;
+    final colorScheme = theme.colorScheme;
+    // final isDarkMode = theme.brightness == Brightness.dark; // Not needed if using ColorScheme correctly
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+      padding: EdgeInsets.symmetric(horizontal: AppSpacing.inlineSpacing * 1.5), // Use AppSpacing
       decoration: BoxDecoration(
-        color: AppColors.inputBackground,
-        borderRadius: BorderRadius.circular(24),
+        color: colorScheme.surfaceVariant, // Use themed surface variant
+        borderRadius: BorderRadius.circular(AppSpacing.borderRadiusXLarge), // Use AppSpacing
         border: Border.all(
-          color: AppColors.inputBorder.withOpacity(0.5),
+          color: colorScheme.outline.withOpacity(0.5), // Use themed outline
           width: 1,
         ),
       ),
@@ -109,67 +110,54 @@ class _MessageInputState extends State<MessageInput> {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Expanded(
-            child: TextSelectionTheme(
-              data: TextSelectionThemeData(
-                selectionColor: AppColors.selection,
-                cursorColor: AppColors.primary,
-                selectionHandleColor: AppColors.selectionHandle,
+            // Apply TextSelectionTheme globally in MaterialApp or use TextField properties
+            child: TextField(
+              controller: _controller,
+              focusNode: _focusNode,
+              maxLines: 6,
+              minLines: 1,
+              textInputAction: TextInputAction.newline, // Allow multiline input
+              keyboardType: TextInputType.multiline,
+              // No need for EnterKeyFormatter if textInputAction is newline
+              // inputFormatters: [EnterKeyFormatter()], 
+              onChanged: (text) {
+                setState(() {});
+              },
+              onTapOutside: (event) => _focusNode.unfocus(),
+              autofocus: false,
+              cursorColor: colorScheme.primary, // Use themed cursor color
+              cursorWidth: 1.5,
+              cursorRadius: const Radius.circular(1),
+              style: theme.textTheme.bodyLarge?.copyWith(
+                fontSize: 15,
+                height: 1.5,
+                letterSpacing: 0.15,
+                color: colorScheme.onSurfaceVariant, // Use themed text color
               ),
-              child: Focus(
-                onKeyEvent: (node, event) {
-                  if (event is KeyDownEvent && 
-                      event.logicalKey == LogicalKeyboardKey.enter && 
-                      !(HardwareKeyboard.instance.isShiftPressed)) {
-                    _handleSubmit();
-                    return KeyEventResult.handled;
-                  }
-                  return KeyEventResult.ignored;
-                },
-                child: TextField(
-                  controller: _controller,
-                  focusNode: _focusNode,
-                  maxLines: 6,
-                  minLines: 1,
-                  textInputAction: TextInputAction.send,
-                  keyboardType: TextInputType.multiline,
-                  onChanged: (text) {
-                    setState(() {});
-                  },
-                  onSubmitted: (text) => _handleSubmit(),
-                  onEditingComplete: _handleSubmit,
-                  onTapOutside: (event) => _focusNode.unfocus(),
-                  autofocus: false,
-                  cursorWidth: 2,
-                  cursorRadius: const Radius.circular(2),
-                  cursorHeight: 22,
-                  style: theme.textTheme.bodyLarge?.copyWith(
-                    fontSize: 15,
-                    height: 1.5,
-                    letterSpacing: 0.15,
-                    color: AppColors.onSurface,
-                  ),
-                  inputFormatters: [EnterKeyFormatter()],
-                  decoration: InputDecoration(
-                    hintText: 'Message Otto',
-                    hintStyle: TextStyle(
-                      color: AppColors.inputPlaceholder,
-                      fontSize: 15,
-                    ),
-                    filled: false,
-                    border: InputBorder.none,
-                    enabledBorder: InputBorder.none,
-                    focusedBorder: InputBorder.none,
-                    contentPadding: const EdgeInsets.symmetric(
-                      vertical: 16.0,
-                    ),
-                    isDense: true,
-                  ),
+              decoration: InputDecoration(
+                hintText: 'Message Otto',
+                hintStyle: theme.textTheme.bodyLarge?.copyWith(
+                  fontSize: 15,
+                  color: colorScheme.onSurfaceVariant.withOpacity(0.5), // Themed hint color
                 ),
+                filled: false,
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                contentPadding: const EdgeInsets.symmetric(
+                  vertical: 14.0, // Adjust padding
+                  horizontal: 4.0,
+                ),
+                isDense: true,
               ),
+              // Handle Shift+Enter for newline, Enter for submit
+              onSubmitted: (value) => _handleSubmit(), // Still allow submit on Enter from software keyboard
+              onEditingComplete: () {}, // Prevent default behavior which might submit
             ),
           ),
+          SizedBox(width: AppSpacing.inlineSpacingSmall), // Use AppSpacing
           IconButton(
-            onPressed: widget.isLoading ? null : _handleSubmit,
+            onPressed: widget.isLoading || _controller.text.trim().isEmpty ? null : _handleSubmit,
             icon: widget.isLoading
                 ? SizedBox(
                     width: 18,
@@ -177,17 +165,18 @@ class _MessageInputState extends State<MessageInput> {
                     child: CircularProgressIndicator(
                       strokeWidth: 2,
                       valueColor: AlwaysStoppedAnimation<Color>(
-                        AppColors.primary.withOpacity(0.8),
+                        colorScheme.primary.withOpacity(0.8), // Use themed primary color
                       ),
                     ),
                   )
                 : Icon(
                     Icons.send_rounded,
-                    color: AppColors.primary.withOpacity(0.8),
+                    color: colorScheme.primary, // Use themed primary color
                     size: 20,
                   ),
             padding: const EdgeInsets.all(12),
             visualDensity: VisualDensity.compact,
+            tooltip: 'Send message',
           ),
         ],
       ),

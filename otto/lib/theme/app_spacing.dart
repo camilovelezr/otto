@@ -21,6 +21,17 @@ class AppSpacing {
   static const double buttonGroupSpacing = inlineSpacing;
   static const double iconSpacing = listItemSpacing;
   
+  // === Add Missing Spacing Constants ===
+  static const double verticalPaddingSmall = 4.0; // Small vertical padding
+  static const double inlineSpacingSmall = 4.0;   // Small horizontal padding
+  static const double pagePaddingHorizontal = 16.0; // Standard page horizontal padding
+  
+  // === Add Missing Border Radius Constants ===
+  static const double borderRadiusSmall = 4.0;    // For small elements, tags
+  static const double borderRadiusMedium = 8.0;   // Standard radius for cards, inputs
+  static const double borderRadiusLarge = 12.0;   // For larger containers, dialogs
+  static const double borderRadiusXLarge = 16.0;  // For prominent elements
+  
   // For creating dynamic, scaled spacing
   static double scale(double value, double factor) => value * factor;
   

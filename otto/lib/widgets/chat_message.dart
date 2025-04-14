@@ -20,39 +20,49 @@ class ChatMessageWidget extends StatelessWidget {
     final isDarkMode = theme.brightness == Brightness.dark;
     final bool isUserMessage = message.isUser; // Use the getter from the model
 
+    // Get highlight theme based on current brightness
     final HighlightTheme codeHighlightTheme = isDarkMode ? atomOneDarkTheme : atomOneLightTheme;
 
+    // Use ColorScheme for backgrounds
     final backgroundColor = isUserMessage
-        ? isDarkMode ? AppColors.userMessageBg.withOpacity(0.3) : AppColors.userMessageBg.withOpacity(0.15)
-        : isDarkMode ? AppColors.assistantMessageBg.withOpacity(0.3) : AppColors.assistantMessageBg.withOpacity(0.15);
+        ? theme.colorScheme.primaryContainer // Use primaryContainer for user
+        : theme.colorScheme.surfaceVariant; // Use surfaceVariant for assistant
 
+    // Use ColorScheme for text colors
     final textColor = isUserMessage
-        ? isDarkMode ? AppColors.userMessage : AppColors.userMessage
-        : isDarkMode ? AppColors.onSurfaceMedium : AppColors.onSurface;
+        ? theme.colorScheme.onPrimaryContainer // Use onPrimaryContainer for user
+        : theme.colorScheme.onSurfaceVariant; // Use onSurfaceVariant for assistant
 
     final baseTextStyle = theme.textTheme.bodyLarge?.copyWith(
       color: textColor,
       height: 1.5,
       letterSpacing: 0.15,
-    ) ?? TextStyle(color: textColor);
+    ) ?? TextStyle(color: textColor); // Fallback
 
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8.0),
+      padding: const EdgeInsets.symmetric(vertical: AppSpacing.verticalPaddingSmall), // Use AppSpacing
       child: Column(
         crossAxisAlignment: isUserMessage ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         children: [
           Container(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 24.0,
-              vertical: 16.0,
+            padding: EdgeInsets.symmetric(
+              horizontal: AppSpacing.inlineSpacing * 2.5, // Use AppSpacing
+              vertical: AppSpacing.inlineSpacing * 1.5, // Use AppSpacing
             ),
             decoration: BoxDecoration(
               color: backgroundColor,
               borderRadius: BorderRadius.only(
-                topLeft: const Radius.circular(12),
-                topRight: const Radius.circular(12),
-                bottomLeft: Radius.circular(isUserMessage ? 12 : 4),
-                bottomRight: Radius.circular(isUserMessage ? 4 : 12),
+                topLeft: Radius.circular(AppSpacing.borderRadiusMedium), // Use AppSpacing
+                topRight: Radius.circular(AppSpacing.borderRadiusMedium),
+                bottomLeft: Radius.circular(isUserMessage ? AppSpacing.borderRadiusMedium : AppSpacing.borderRadiusSmall / 2),
+                bottomRight: Radius.circular(isUserMessage ? AppSpacing.borderRadiusSmall / 2 : AppSpacing.borderRadiusMedium),
+              ),
+              // Apply border consistently, but change color based on theme
+              border: Border.all(
+                color: isDarkMode 
+                    ? Colors.transparent // Transparent border in dark mode
+                    : theme.colorScheme.outline.withOpacity(0.5), // Visible border in light mode
+                width: 0.5, // Consistent width
               ),
             ),
             child: SelectionArea(

@@ -80,31 +80,15 @@ class MyApp extends StatelessWidget {
           return MaterialApp(
             title: 'Otto',
             debugShowCheckedModeBanner: false,
-            theme: themeProvider.currentTheme.copyWith(
+            theme: themeProvider.lightTheme.copyWith(
+              textTheme: GoogleFonts.robotoTextTheme(themeProvider.lightTheme.textTheme),
               platform: TargetPlatform.macOS,
-              scaffoldBackgroundColor: Colors.white,
-              textTheme: GoogleFonts.robotoTextTheme(
-                themeProvider.currentTheme.textTheme,
-              ),
-              colorScheme: themeProvider.currentTheme.colorScheme.copyWith(
-                background: Colors.white,
-                surface: Colors.white,
-              ),
             ),
-            darkTheme: themeProvider.currentTheme.copyWith(
+            darkTheme: themeProvider.darkTheme.copyWith(
+              textTheme: GoogleFonts.robotoTextTheme(themeProvider.darkTheme.textTheme),
               platform: TargetPlatform.macOS,
-              scaffoldBackgroundColor: const Color(0xFF121212),
-              textTheme: GoogleFonts.robotoTextTheme(
-                themeProvider.currentTheme.textTheme.apply(
-                  bodyColor: Colors.white, 
-                  displayColor: Colors.white
-                ),
-              ),
-              colorScheme: themeProvider.currentTheme.colorScheme.copyWith(
-                background: const Color(0xFF121212),
-                surface: const Color(0xFF121212),
-              ),
             ),
+            themeMode: themeProvider.themeMode,
             initialRoute: '/',
             routes: {
               '/': (context) => const AuthWrapper(),

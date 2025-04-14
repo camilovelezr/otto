@@ -2,14 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/rendering.dart'; // Add import for ScrollDirection
 import 'package:flutter/gestures.dart'; // Add this import for PointerScrollEvent
+import 'package:flutter/foundation.dart'; // Add import for kIsWeb
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:ui';
-import 'dart:math';
+import 'dart:math' as math; // Add import for math.min
 import '../services/chat_provider.dart';
 import '../services/auth_provider.dart';
 import '../theme/theme_provider.dart';
 import '../theme/app_colors.dart';
+import '../theme/app_spacing.dart'; // Add import for AppSpacing
 import '../widgets/chat_message.dart';
 import '../widgets/message_input.dart';
 import '../widgets/model_selector.dart';
@@ -19,6 +21,7 @@ import '../screens/settings_screen.dart'; // Import the new settings screen
 import '../widgets/token_window_visualization.dart';
 import '../config/env_config.dart';
 import 'dart:async';
+import '../widgets/model_selector_button.dart'; // Import the new widget
 
 // Dedicated class to manage scroll behavior
 class ChatScrollManager {
@@ -63,50 +66,53 @@ class ChatScrollManager {
 // Custom scrollbar thumb widget with fixed size
 class CustomScrollbarThumb extends StatefulWidget {
   final ScrollController scrollController;
-  final double thickness;
-  final Color color;
-  final double height;
   final double minThumbLength;
+  final double thickness;
+  // Removed color parameter
 
   const CustomScrollbarThumb({
     Key? key,
     required this.scrollController,
-    this.thickness = 6.0,
-    required this.color,
-    this.height = 60.0,
-    this.minThumbLength = 60.0,
+    this.minThumbLength = 48.0,
+    this.thickness = 6.0, // Default thickness
+    // Removed color parameter
   }) : super(key: key);
 
   @override
   State<CustomScrollbarThumb> createState() => _CustomScrollbarThumbState();
 }
 
-class _CustomScrollbarThumbState extends State<CustomScrollbarThumb> with SingleTickerProviderStateMixin {
+class _CustomScrollbarThumbState extends State<CustomScrollbarThumb>
+    with TickerProviderStateMixin {
+  double _currentThumbOffset = 0.0;
   bool _isDragging = false;
   bool _isHovering = false;
   bool _isScrolling = false;
-  DateTime _lastScrollUpdate = DateTime.now();
   Timer? _scrollVisibilityTimer;
-  late AnimationController _thumbAnimationController;
-  late Animation<double> _thumbPositionAnimation;
-  double _currentThumbOffset = 0.0;
-  double _lastScrollPosition = 0.0;
   Timer? _scrollEndTimer;
+  late AnimationController _thumbAnimationController; // For smooth fade
+  late Animation<double> _thumbOpacityAnimation;
 
   @override
   void initState() {
     super.initState();
     widget.scrollController.addListener(_handleScrollChange);
     
-    // Initialize animation controller for smooth thumb movement
     _thumbAnimationController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 150), // Increased duration for smoother movement
+      duration: const Duration(milliseconds: 200), // Fade duration
     );
-    
-    _thumbPositionAnimation = _thumbAnimationController
-      .drive(CurveTween(curve: Curves.easeOutExpo)) // Changed to easeOutExpo for smoother deceleration
-      .drive(Tween<double>(begin: 0.0, end: 0.0));
+    _thumbOpacityAnimation = CurvedAnimation(
+      parent: _thumbAnimationController,
+      curve: Curves.easeInOut,
+    );
+
+    // Initial check for scroll extent
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && widget.scrollController.hasClients) {
+        _handleScrollChange(); // Initialize thumb position
+      }
+    });
   }
 
   @override
@@ -124,47 +130,54 @@ class _CustomScrollbarThumbState extends State<CustomScrollbarThumb> with Single
     final ScrollPosition position = widget.scrollController.position;
     final double viewportDimension = position.viewportDimension;
     final double maxScroll = position.maxScrollExtent;
+    final double minScroll = position.minScrollExtent;
+    final double scrollExtent = maxScroll - minScroll;
     
-    if (maxScroll <= 0 || viewportDimension <= 0) return;
+    if (scrollExtent <= 0 || viewportDimension <= 0) {
+       if (_isScrolling) {
+         setState(() => _isScrolling = false);
+         _thumbAnimationController.reverse(); // Fade out if no scroll extent
+       }
+       return;
+    }
 
     // Fixed ratio calculation
-    final double ratio = position.pixels / maxScroll;
+    final double ratio = (position.pixels - minScroll) / scrollExtent;
     final double availableSpace = viewportDimension - widget.minThumbLength;
     final double thumbPosition = (1.0 - ratio.clamp(0.0, 1.0)) * availableSpace;
 
+    if (!_isScrolling) {
+       setState(() => _isScrolling = true);
+       _thumbAnimationController.forward(); // Fade in
+    }
     setState(() {
       _currentThumbOffset = thumbPosition.clamp(0.0, availableSpace);
-      _isScrolling = true;
     });
 
     _scrollVisibilityTimer?.cancel();
-    _scrollVisibilityTimer = Timer(const Duration(milliseconds: 400), () {
+    _scrollVisibilityTimer = Timer(const Duration(milliseconds: 800), () { // Longer delay
       if (mounted && !_isDragging && !_isHovering) {
-        setState(() {
-          _isScrolling = false;
-        });
+        setState(() => _isScrolling = false);
+        _thumbAnimationController.reverse(); // Fade out
       }
     });
   }
 
   void _startDrag(DragStartDetails details) {
-    setState(() {
-      _isDragging = true;
-    });
+    setState(() => _isDragging = true);
+    _thumbAnimationController.forward(); // Ensure visible on drag
   }
 
   void _endDrag(DragEndDetails details) {
-    setState(() {
-      _isDragging = false;
-    });
+    if (!mounted) return;
+    setState(() => _isDragging = false);
     
     if (!_isHovering) {
       _scrollVisibilityTimer?.cancel();
-      _scrollVisibilityTimer = Timer(const Duration(milliseconds: 400), () {
+      _scrollVisibilityTimer = Timer(const Duration(milliseconds: 800), () {
         if (mounted && !_isDragging && !_isHovering) {
-          setState(() {
-            _isScrolling = false;
-          });
+          setState(() => _isScrolling = false);
+          _thumbAnimationController.reverse(); // Fade out
         }
       });
     }
@@ -176,17 +189,19 @@ class _CustomScrollbarThumbState extends State<CustomScrollbarThumb> with Single
     final ScrollPosition position = widget.scrollController.position;
     final double viewportDimension = position.viewportDimension;
     final double maxScroll = position.maxScrollExtent;
+    final double minScroll = position.minScrollExtent;
+    final double scrollExtent = maxScroll - minScroll;
     
-    if (maxScroll <= 0 || viewportDimension <= 0) return;
+    if (scrollExtent <= 0 || viewportDimension <= 0) return;
 
     // Fixed ratio for drag
     final double availableSpace = viewportDimension - widget.minThumbLength;
     final double dragDelta = details.delta.dy;
     final double dragRatio = dragDelta / availableSpace;
-    final double scrollDelta = -dragRatio * maxScroll;
+    final double scrollDelta = -dragRatio * scrollExtent;
     
     widget.scrollController.jumpTo(
-      (position.pixels + scrollDelta).clamp(0.0, maxScroll)
+      (position.pixels + scrollDelta).clamp(minScroll, maxScroll)
     );
   }
 
@@ -194,26 +209,53 @@ class _CustomScrollbarThumbState extends State<CustomScrollbarThumb> with Single
   Widget build(BuildContext context) {
     if (!widget.scrollController.hasClients) return const SizedBox();
 
+    // Get theme data for scrollbar
+    final theme = Theme.of(context);
+    final scrollbarTheme = theme.scrollbarTheme;
+    final Set<MaterialState> currentStates = {
+      if (_isDragging) MaterialState.dragged,
+      if (_isHovering) MaterialState.hovered,
+    };
+
+    final effectiveThickness = scrollbarTheme.thickness?.resolve(currentStates) ?? widget.thickness;
+    final effectiveThumbColor = scrollbarTheme.thumbColor?.resolve(currentStates) ?? theme.colorScheme.onSurface.withOpacity(0.5);
+    final effectiveRadius = scrollbarTheme.radius ?? Radius.circular(effectiveThickness / 2);
+    final showScrollbar = scrollbarTheme.thumbVisibility?.resolve(currentStates) ?? (_isDragging || _isHovering || _isScrolling);
+
     try {
       final ScrollPosition position = widget.scrollController.position;
       final double viewportDimension = position.viewportDimension;
-      final double fullExtent = position.maxScrollExtent - position.minScrollExtent;
+      final double scrollExtent = position.maxScrollExtent - position.minScrollExtent;
       
-      if (fullExtent <= 0 || viewportDimension <= 0) return const SizedBox();
+      if (scrollExtent <= 0 || viewportDimension <= 0) return const SizedBox();
       
       final double thumbLength = widget.minThumbLength;
       final double trackHeight = viewportDimension;
-      final bool shouldShowScrollbar = _isDragging || _isHovering || _isScrolling;
+      
+      // Control visibility with AnimatedOpacity tied to the controller
+      if (showScrollbar && _thumbAnimationController.status == AnimationStatus.dismissed) {
+          _thumbAnimationController.forward();
+      } else if (!showScrollbar && (_thumbAnimationController.status == AnimationStatus.completed || _thumbAnimationController.status == AnimationStatus.forward)) {
+          _thumbAnimationController.reverse();
+      }
       
       return MouseRegion(
-        onEnter: (_) => setState(() => _isHovering = true),
+        onEnter: (_) => setState(() {
+           _isHovering = true;
+           if (scrollbarTheme.thumbVisibility?.resolve({MaterialState.hovered}) ?? true) {
+              _thumbAnimationController.forward(); // Fade in on hover if theme allows
+           }
+        }),
         onExit: (_) => setState(() {
           _isHovering = false;
           if (!_isDragging) {
             _scrollVisibilityTimer?.cancel();
-            _scrollVisibilityTimer = Timer(const Duration(milliseconds: 400), () {
+            _scrollVisibilityTimer = Timer(const Duration(milliseconds: 800), () {
               if (mounted && !_isDragging && !_isHovering) {
                 setState(() => _isScrolling = false);
+                 if (!(scrollbarTheme.thumbVisibility?.resolve({}) ?? true)) { // Check if always visible
+                   _thumbAnimationController.reverse(); // Fade out only if not always visible
+                 }
               }
             });
           }
@@ -222,21 +264,21 @@ class _CustomScrollbarThumbState extends State<CustomScrollbarThumb> with Single
           onVerticalDragStart: _startDrag,
           onVerticalDragUpdate: _updateDrag,
           onVerticalDragEnd: _endDrag,
-          child: AnimatedOpacity(
-            opacity: shouldShowScrollbar ? 1.0 : 0.0,
-            duration: const Duration(milliseconds: 200),
+          child: FadeTransition(
+            opacity: _thumbOpacityAnimation,
             child: Container(
-              width: 12.0,
+              width: effectiveThickness + 4, // Add padding for easier grabbing
               height: trackHeight,
               alignment: Alignment.topRight,
+              color: Colors.transparent, // Make outer container transparent
               child: Transform.translate(
                 offset: Offset(0, _currentThumbOffset),
                 child: Container(
-                  width: widget.thickness,
+                  width: effectiveThickness,
                   height: thumbLength,
                   decoration: BoxDecoration(
-                    color: widget.color.withOpacity(_isDragging ? 1.0 : 0.6),
-                    borderRadius: BorderRadius.circular(widget.thickness / 2),
+                    color: effectiveThumbColor,
+                    borderRadius: BorderRadius.all(effectiveRadius),
                   ),
                 ),
               ),
@@ -245,6 +287,7 @@ class _CustomScrollbarThumbState extends State<CustomScrollbarThumb> with Single
         ),
       );
     } catch (e) {
+      print("Error building scrollbar thumb: $e"); // Log errors
       return const SizedBox();
     }
   }
@@ -260,9 +303,9 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   final ChatScrollManager _scrollManager = ChatScrollManager();
   final FocusNode _inputFocusNode = FocusNode();
-  bool _isSidePanelExpanded = true;
+  bool _isSidePanelVisible = false; // Manage side panel visibility
   bool _isTokenWindowVisible = true;
-  static const String _sidePanelKey = 'side_panel_expanded';
+  static const String _sidePanelKey = 'side_panel_visible';
   static const String _tokenWindowKey = 'token_window_visible';
   late AnimationController _shimmerController;
   late TextEditingController _messageController;
@@ -272,28 +315,32 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
-    _messageController = TextEditingController();
-    _loadSavedStates();
     
-    // Get ChatProvider immediately in initState
+    // Initialize ChatProvider immediately
     _chatProvider = Provider.of<ChatProvider>(context, listen: false);
-    
-    // Initialize controllers
+
+    // Initialize other controllers
+    _messageController = TextEditingController();
     _shimmerController = AnimationController(
       duration: const Duration(milliseconds: 1500),
       vsync: this,
     )..repeat();
-    
-    // Initialize scroll manager
     _scrollManager.initialize();
-    
-    // Set up other providers and listeners post-frame
+    // _loadSavedStates(); // Keep if you want persistence
+
+    // Use post frame callback for things needing context/build completion
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      // Add listener first
-      _chatProvider.addListener(_handleChatUpdate);
+      if (!mounted) return; // Check if widget is still mounted
       
-      // Initialize chat in the background
-      _initializeChat();
+      // Set initial side panel visibility
+      final screenWidth = MediaQuery.of(context).size.width;
+      setState(() {
+         _isSidePanelVisible = screenWidth >= 1024; // Example: open on larger screens
+      });
+      
+      // Add listener and initialize chat logic after first frame
+       _chatProvider.addListener(_handleChatUpdate);
+       _initializeChat();
     });
   }
 
@@ -321,14 +368,14 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   Future<void> _loadSavedStates() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
-      _isSidePanelExpanded = prefs.getBool(_sidePanelKey) ?? true;
+      _isSidePanelVisible = prefs.getBool(_sidePanelKey) ?? false;
       _isTokenWindowVisible = prefs.getBool(_tokenWindowKey) ?? true;
     });
   }
 
-  Future<void> _saveSidePanelState(bool isExpanded) async {
+  Future<void> _saveSidePanelState(bool isVisible) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_sidePanelKey, isExpanded);
+    await prefs.setBool(_sidePanelKey, isVisible);
   }
 
   Future<void> _saveTokenWindowState(bool isVisible) async {
@@ -337,12 +384,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   }
 
   void _toggleSidePanel() {
-    setState(() {
-      _isSidePanelExpanded = !_isSidePanelExpanded;
-      _saveSidePanelState(_isSidePanelExpanded);
-      
-      // Play a subtle haptic feedback when toggling the panel
-      HapticFeedback.lightImpact();
+     setState(() {
+      _isSidePanelVisible = !_isSidePanelVisible;
+       // Optionally save state
+       // _saveSidePanelState(_isSidePanelVisible); 
     });
   }
 
@@ -355,9 +400,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
   void _handleChatUpdate() {
     setState(() {});
-    
-    // Only scroll to bottom when sending a new message
-    if (_chatProvider.messages.isNotEmpty && _chatProvider.isLoading) {
+    if (_chatProvider.messages.isNotEmpty &&
+        !_chatProvider.messages.last.isUser &&
+        _chatProvider.isLoading) {
+      // Slightly improved logic to scroll when assistant is responding
       Future.delayed(const Duration(milliseconds: 50), () {
         if (mounted) {
           _scrollManager.scrollToBottom(animate: true);
@@ -369,298 +415,191 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   void _focusInputField() {
     _inputFocusNode.requestFocus();
   }
+  
+  void _showModelSelectorDialog() {
+     _showModelSelector(context, _chatProvider); // Reuse existing dialog logic
+  }
 
   @override
   Widget build(BuildContext context) {
-    final themeProvider = Provider.of<ThemeProvider>(context);
-    final isDarkMode = themeProvider.isDarkMode;
-    final authProvider = Provider.of<AuthProvider>(context);
-    final isAuthenticated = authProvider.isAuthenticated;
-    
-    return Scaffold(
-      backgroundColor: isDarkMode ? AppColors.background : AppColors.backgroundAlt,
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: AppColors.backgroundGradient,
-        ),
-        child: Row(
-          children: [
-            if (_isSidePanelExpanded) SidePanel(
-              isExpanded: _isSidePanelExpanded,
-              onToggle: _toggleSidePanel,
-              onNewChat: () {
-                _focusInputField();
-              },
-            ),
-            Expanded(
-              child: Column(
-                children: [
-                  // Token usage visualization
-                  if (_isTokenWindowVisible && _chatProvider.totalTokens > 0)
-                    TokenWindowVisualization(
-                      totalTokens: _chatProvider.totalTokens,
-                      inputTokens: _chatProvider.totalInputTokens,
-                      outputTokens: _chatProvider.totalOutputTokens,
-                      model: _chatProvider.selectedModel,
-                      totalCost: _chatProvider.totalCost,
-                    ),
-                  
-                  // App bar
-                  _buildAppBar(context, isDarkMode),
-                  
-                  // Main chat area
-                  Expanded(
-                    child: Listener(
-                      onPointerSignal: (event) {
-                        if (event is PointerScrollEvent && _scrollManager.controller.hasClients) {
-                          _scrollManager.controller.jumpTo(
-                            (_scrollManager.controller.offset + event.scrollDelta.dy)
-                              .clamp(0.0, _scrollManager.controller.position.maxScrollExtent)
-                          );
-                        }
-                      },
-                      child: Stack(
-                        clipBehavior: Clip.none,
-                        children: [
-                          ChatContainer(
-                            child: _buildMessagesList(_chatProvider),
-                          ),
-                          Positioned(
-                            right: 2,
-                            top: 0,
-                            bottom: 0,
-                            child: CustomScrollbarThumb(
-                              scrollController: _scrollManager.controller,
-                              color: AppColors.scrollbarThumb,
-                            ),
-                          ),
-                          if (_chatProvider.error != null)
-                            _buildErrorMessage(_chatProvider),
-                        ],
-                      ),
-                    ),
-                  ),
-                  
-                  // Message input at the bottom
-                  ChatContainer(
-                    child: Padding(
-                      padding: EdgeInsets.only(
-                        bottom: MediaQuery.of(context).viewPadding.bottom,
-                      ),
-                      child: _buildMessageInput(_chatProvider, isAuthenticated),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildAppBar(BuildContext context, bool isDarkMode) {
     final theme = Theme.of(context);
-    
-    return Container(
-      height: 60,
-      decoration: BoxDecoration(
-        color: isDarkMode ? AppColors.background : AppColors.backgroundAlt,
-        gradient: AppColors.backgroundGradient,
-        border: Border(
-          bottom: BorderSide(
-            color: theme.colorScheme.onSurface.withOpacity(0.05),
-            width: 1,
-          ),
-        ),
-      ),
-      child: Row(
-        children: [
-          // Add padding before the button to move it right
-          const SizedBox(width: 8),
-          
-          // Side panel toggle with consistent hamburger icon
-          IconButton(
-            icon: Icon(
-              Icons.menu,
-              color: AppColors.onSurface.withOpacity(0.8),
-            ),
-            onPressed: _toggleSidePanel,
-            tooltip: _isSidePanelExpanded ? 'Close side panel' : 'Open side panel',
-          ),
-          
-          // App title
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text(
-              'Otto',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: AppColors.onSurface,
-              ),
-            ),
-          ),
-          
-          const Spacer(),
+    final colorScheme = theme.colorScheme;
+    final chatProvider = context.watch<ChatProvider>(); // Watch for state changes
+    final authProvider = context.watch<AuthProvider>();
+    final isAuthenticated = authProvider.isAuthenticated;
 
-          // Token window toggle
-          if (_chatProvider.totalTokens > 0)
-            IconButton(
-              icon: Icon(
-                _isTokenWindowVisible ? Icons.analytics : Icons.analytics_outlined,
-                color: AppColors.onSurface.withOpacity(0.8),
-              ),
-              onPressed: _toggleTokenWindow,
-              tooltip: _isTokenWindowVisible ? 'Hide token usage' : 'Show token usage',
-            ),
+    return Scaffold(
+      backgroundColor: colorScheme.background,
+      body: Row(
+        children: [
+          // Animated side panel
+          AnimatedContainer(
+             duration: const Duration(milliseconds: 250),
+             curve: Curves.easeOutCubic,
+             width: _isSidePanelVisible ? math.min(MediaQuery.of(context).size.width * 0.8, 300.0) : 0,
+             child: _isSidePanelVisible 
+                 ? SidePanel(
+                     isExpanded: _isSidePanelVisible,
+                     onToggle: _toggleSidePanel,
+                     onNewChat: () {
+                       _focusInputField();
+                       if (!kIsWeb && MediaQuery.of(context).size.width < 600) {
+                         _toggleSidePanel(); // Close on mobile after new chat
+                       }
+                     },
+                   )
+                 : null,
+          ),
           
-          // Model selector
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: () {
-                  _showModelSelector(context, _chatProvider);
-                },
-                borderRadius: BorderRadius.circular(24),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: AppColors.surfaceLight.withOpacity(0.3),
-                    borderRadius: BorderRadius.circular(24),
-                    border: Border.all(
-                      color: AppColors.onSurface.withOpacity(0.1),
-                      width: 1,
-                    ),
+          // Main Chat Content Area
+          Expanded(
+            child: Column(
+              children: [
+                // --- Top Control Row --- 
+                Padding(
+                  padding: EdgeInsets.only(
+                     left: AppSpacing.inlineSpacing, 
+                     right: AppSpacing.pagePaddingHorizontal,
+                     top: MediaQuery.of(context).padding.top + AppSpacing.inlineSpacingSmall, // SafeArea top + padding
+                     bottom: AppSpacing.inlineSpacingSmall,
                   ),
                   child: Row(
-                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(
-                        _chatProvider.selectedModel?.displayName ?? 'Select Model',
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: AppColors.onSurface.withOpacity(0.8),
-                        ),
+                      // Hamburger Menu Toggle
+                      IconButton(
+                        icon: Icon(_isSidePanelVisible ? Icons.close : Icons.menu),
+                        tooltip: _isSidePanelVisible ? 'Close Panel' : 'Open Panel',
+                        onPressed: _toggleSidePanel,
+                        color: colorScheme.onSurface.withOpacity(0.7),
                       ),
-                      const SizedBox(width: 4),
-                      Icon(
-                        Icons.arrow_drop_down,
-                        color: AppColors.onSurface.withOpacity(0.8),
+                      const SizedBox(width: AppSpacing.inlineSpacing),
+                      // Model Selector Button
+                      ModelSelectorButton(
+                        selectedModel: chatProvider.selectedModel,
+                        availableModels: chatProvider.availableModels,
                       ),
+                      const Spacer(), // Pushes token window toggle right
+                      // Token Window Toggle (Optional)
+                      if (chatProvider.totalTokens > 0)
+                         IconButton(
+                           icon: Icon(
+                             _isTokenWindowVisible ? Icons.insights_rounded : Icons.insights_outlined,
+                             size: 20,
+                             color: colorScheme.onSurface.withOpacity(0.7),
+                           ),
+                           onPressed: _toggleTokenWindow,
+                           tooltip: _isTokenWindowVisible ? 'Hide Token Usage' : 'Show Token Usage',
+                         ),
                     ],
                   ),
                 ),
-              ),
+                // --- End Top Control Row ---
+
+                // Token usage visualization (if visible)
+                if (_isTokenWindowVisible && chatProvider.totalTokens > 0)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.pagePaddingHorizontal,
+                      vertical: AppSpacing.inlineSpacingSmall,
+                    ),
+                    child: TokenWindowVisualization(
+                      totalTokens: chatProvider.totalTokens,
+                      inputTokens: chatProvider.totalInputTokens,
+                      outputTokens: chatProvider.totalOutputTokens,
+                      model: chatProvider.selectedModel,
+                      totalCost: chatProvider.totalCost,
+                    ),
+                  ),
+                
+                // Main chat messages area
+                Expanded(
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      ChatContainer(
+                        child: _buildMessagesList(chatProvider),
+                      ),
+                      // Positioned Scrollbar
+                      Positioned(
+                        right: 2, 
+                        top: 0,
+                        bottom: 0,
+                        child: CustomScrollbarThumb(
+                          scrollController: _scrollManager.controller,
+                        ),
+                      ),
+                      // Error Message Overlay
+                      if (chatProvider.error != null)
+                        Positioned(
+                          bottom: 80, // Position above input
+                          left: AppSpacing.pagePaddingHorizontal,
+                          right: AppSpacing.pagePaddingHorizontal,
+                          child: _buildErrorMessage(chatProvider),
+                        ),
+                    ],
+                  ),
+                ),
+                
+                // Message input area
+                ChatContainer(
+                  child: Padding(
+                    padding: EdgeInsets.only(
+                      bottom: MediaQuery.of(context).padding.bottom + AppSpacing.inlineSpacing, // SafeArea bottom + padding
+                      left: AppSpacing.inlineSpacing, // Add consistent padding
+                      right: AppSpacing.inlineSpacing,
+                    ),
+                    child: _buildMessageInput(chatProvider, isAuthenticated),
+                  ),
+                ),
+              ],
             ),
           ),
-          
-          // Settings button
-          IconButton(
-            icon: Icon(
-              Icons.settings,
-              color: AppColors.onSurface.withOpacity(0.8),
-            ),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const SettingsScreen()),
-              );
-            },
-            tooltip: 'Settings',
-          ),
-          
-          // Sign out button
-          IconButton(
-            icon: Icon(
-              Icons.logout,
-              color: AppColors.onSurface.withOpacity(0.8),
-            ),
-            onPressed: () {
-              _showSignOutConfirmation(context);
-            },
-            tooltip: 'Sign out',
-          ),
-          
-          const SizedBox(width: 8),
         ],
       ),
     );
   }
 
   Widget _buildMessagesList(ChatProvider chatProvider) {
-    var messages = chatProvider.messages;
-    final theme = Theme.of(context);
+    final messages = chatProvider.messages;
+    final theme = Theme.of(context); // Get theme for empty state
 
-    return Stack(
-      children: [
-        AnimatedOpacity(
-          duration: const Duration(milliseconds: 200),
-          opacity: messages.isEmpty ? 1.0 : 0.0,
-          child: IgnorePointer(
-            ignoring: !messages.isEmpty,
-            child: _buildEmptyState(context),
-          ),
+    if (messages.isEmpty) {
+      return _buildEmptyState(context);
+    }
+
+    return GestureDetector(
+      onTap: () => FocusScope.of(context).unfocus(), // Dismiss keyboard on tap
+      child: ScrollConfiguration(
+        behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+        child: ListView.builder(
+          controller: _scrollManager.controller,
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.pagePaddingHorizontal),
+          shrinkWrap: false,
+          reverse: true,
+          addRepaintBoundaries: true,
+          cacheExtent: 10000,
+          clipBehavior: Clip.none,
+          itemCount: messages.length,
+          itemBuilder: (context, index) {
+            final message = messages[messages.length - 1 - index];
+            
+            // Use RepaintBoundary for performance optimization
+            return RepaintBoundary(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.inlineSpacingSmall, // Adjust spacing as needed
+                  vertical: AppSpacing.verticalPaddingSmall / 2,
+                ),
+                child: ChatMessageWidget(
+                  key: ValueKey('msg_${message.id}'),
+                  message: message,
+                ),
+              ),
+            );
+          },
         ),
-        AnimatedOpacity(
-          duration: const Duration(milliseconds: 200),
-          opacity: messages.isEmpty ? 0.0 : 1.0,
-          child: IgnorePointer(
-            ignoring: messages.isEmpty,
-            child: LayoutBuilder(builder: (context, constraints) {
-              return Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  Container(
-                    width: constraints.maxWidth,
-                    child: ScrollConfiguration(
-                      behavior: ScrollConfiguration.of(context).copyWith(
-                        scrollbars: false,
-                        dragDevices: {
-                          PointerDeviceKind.touch,
-                          PointerDeviceKind.mouse,
-                          PointerDeviceKind.trackpad,
-                        },
-                      ),
-                      child: ListView.builder(
-                        key: const ValueKey('messages_list'),
-                        controller: _scrollManager.controller,
-                        padding: EdgeInsets.only(
-                          top: 8,
-                          bottom: MediaQuery.of(context).padding.bottom + 15,
-                          right: 12.0,
-                        ),
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        primary: false,
-                        shrinkWrap: false,
-                        reverse: true,
-                        addRepaintBoundaries: true,
-                        cacheExtent: 10000,
-                        clipBehavior: Clip.none,
-                        itemCount: messages.length,
-                        itemBuilder: (context, index) {
-                          final message = messages[messages.length - 1 - index];
-                          
-                          return RepaintBoundary(
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 2.0, vertical: 1.0),
-                              child: ChatMessageWidget(
-                                key: ValueKey('msg_${message.id}'),
-                                message: message,
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                  ),
-                ],
-              );
-            }),
-          ),
-        ),
-      ],
+      ),
     );
   }
 
@@ -870,34 +809,39 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   }
 
   Widget _buildErrorMessage(ChatProvider chatProvider) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      margin: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.errorContainer.withOpacity(0.9),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              chatProvider.error!,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: Theme.of(context).colorScheme.onErrorContainer,
-              ),
-              textAlign: TextAlign.left,
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.close),
-            onPressed: () {
-              chatProvider.clearError();
-            },
-            tooltip: 'Dismiss error',
-            color: Theme.of(context).colorScheme.onErrorContainer,
-          ),
-        ],
-      ),
+    final theme = Theme.of(context);
+    return Material(
+       elevation: 2,
+       borderRadius: BorderRadius.circular(AppSpacing.borderRadiusMedium),
+       color: theme.colorScheme.errorContainer,
+       child: Container(
+         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+         child: Row(
+           children: [
+              Icon(Icons.error_outline, color: theme.colorScheme.onErrorContainer, size: 20),
+              const SizedBox(width: AppSpacing.inlineSpacing),
+             Expanded(
+               child: Text(
+                 chatProvider.error!,
+                 style: theme.textTheme.bodyMedium?.copyWith(
+                   color: theme.colorScheme.onErrorContainer,
+                 ),
+                 textAlign: TextAlign.left,
+               ),
+             ),
+             IconButton(
+               icon: const Icon(Icons.close, size: 18),
+               onPressed: () {
+                 chatProvider.clearError();
+               },
+               tooltip: 'Dismiss error',
+               color: theme.colorScheme.onErrorContainer,
+               padding: EdgeInsets.zero,
+               constraints: const BoxConstraints(),
+             ),
+           ],
+         ),
+       ),
     );
   }
 
@@ -1156,7 +1100,7 @@ class ChatContainer extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final maxWidth = min(850.0, constraints.maxWidth);
+        final maxWidth = math.min(850.0, constraints.maxWidth);
         
         return Center(
           child: SizedBox(
