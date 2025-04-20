@@ -63,54 +63,43 @@ class ChatScrollManager {
   }
 }
 
-// Custom scrollbar thumb widget with fixed size
+// Custom scrollbar thumb widget with fixed size - OLD WORKING VERSION
 class CustomScrollbarThumb extends StatefulWidget {
   final ScrollController scrollController;
-  final double minThumbLength;
   final double thickness;
-  // Removed color parameter
+  final Color color;
+  final double height; // Note: This parameter seems unused in the old build method
+  final double minThumbLength;
 
   const CustomScrollbarThumb({
     Key? key,
     required this.scrollController,
-    this.minThumbLength = 48.0,
-    this.thickness = 6.0, // Default thickness
-    // Removed color parameter
+    this.thickness = 6.0,
+    required this.color,
+    this.height = 60.0, // Default value from old code
+    this.minThumbLength = 60.0, // Default value from old code
   }) : super(key: key);
 
   @override
   State<CustomScrollbarThumb> createState() => _CustomScrollbarThumbState();
 }
 
-class _CustomScrollbarThumbState extends State<CustomScrollbarThumb>
-    with TickerProviderStateMixin {
-  double _currentThumbOffset = 0.0;
+// State for OLD WORKING VERSION
+class _CustomScrollbarThumbState extends State<CustomScrollbarThumb> with SingleTickerProviderStateMixin { // Added TickerProvider
   bool _isDragging = false;
   bool _isHovering = false;
   bool _isScrolling = false;
   Timer? _scrollVisibilityTimer;
-  Timer? _scrollEndTimer;
-  late AnimationController _thumbAnimationController; // For smooth fade
-  late Animation<double> _thumbOpacityAnimation;
+  double _currentThumbOffset = 0.0;
 
   @override
   void initState() {
     super.initState();
     widget.scrollController.addListener(_handleScrollChange);
-    
-    _thumbAnimationController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 200), // Fade duration
-    );
-    _thumbOpacityAnimation = CurvedAnimation(
-      parent: _thumbAnimationController,
-      curve: Curves.easeInOut,
-    );
-
-    // Initial check for scroll extent
+    // Initial check in case content is already scrollable
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && widget.scrollController.hasClients) {
-        _handleScrollChange(); // Initialize thumb position
+        _handleScrollChange(); 
       }
     });
   }
@@ -119,8 +108,6 @@ class _CustomScrollbarThumbState extends State<CustomScrollbarThumb>
   void dispose() {
     widget.scrollController.removeListener(_handleScrollChange);
     _scrollVisibilityTimer?.cancel();
-    _scrollEndTimer?.cancel();
-    _thumbAnimationController.dispose();
     super.dispose();
   }
 
@@ -133,12 +120,12 @@ class _CustomScrollbarThumbState extends State<CustomScrollbarThumb>
     final double minScroll = position.minScrollExtent;
     final double scrollExtent = maxScroll - minScroll;
     
+    // Hide if not scrollable
     if (scrollExtent <= 0 || viewportDimension <= 0) {
-       if (_isScrolling) {
-         setState(() => _isScrolling = false);
-         _thumbAnimationController.reverse(); // Fade out if no scroll extent
-       }
-       return;
+      if (_isScrolling) {
+        setState(() => _isScrolling = false);
+      }
+      return;
     }
 
     // Fixed ratio calculation
@@ -146,38 +133,44 @@ class _CustomScrollbarThumbState extends State<CustomScrollbarThumb>
     final double availableSpace = viewportDimension - widget.minThumbLength;
     final double thumbPosition = (1.0 - ratio.clamp(0.0, 1.0)) * availableSpace;
 
+    // Show and update position
     if (!_isScrolling) {
-       setState(() => _isScrolling = true);
-       _thumbAnimationController.forward(); // Fade in
+      setState(() => _isScrolling = true);
     }
     setState(() {
       _currentThumbOffset = thumbPosition.clamp(0.0, availableSpace);
     });
 
+    // Start timer to hide thumb when scrolling stops
     _scrollVisibilityTimer?.cancel();
-    _scrollVisibilityTimer = Timer(const Duration(milliseconds: 800), () { // Longer delay
+    _scrollVisibilityTimer = Timer(const Duration(milliseconds: 400), () {
       if (mounted && !_isDragging && !_isHovering) {
-        setState(() => _isScrolling = false);
-        _thumbAnimationController.reverse(); // Fade out
+        setState(() {
+          _isScrolling = false;
+        });
       }
     });
   }
 
   void _startDrag(DragStartDetails details) {
-    setState(() => _isDragging = true);
-    _thumbAnimationController.forward(); // Ensure visible on drag
+    setState(() {
+      _isDragging = true;
+    });
   }
 
   void _endDrag(DragEndDetails details) {
-    if (!mounted) return;
-    setState(() => _isDragging = false);
+    setState(() {
+      _isDragging = false;
+    });
     
+    // Start timer to hide thumb if not hovering
     if (!_isHovering) {
       _scrollVisibilityTimer?.cancel();
-      _scrollVisibilityTimer = Timer(const Duration(milliseconds: 800), () {
+      _scrollVisibilityTimer = Timer(const Duration(milliseconds: 400), () {
         if (mounted && !_isDragging && !_isHovering) {
-          setState(() => _isScrolling = false);
-          _thumbAnimationController.reverse(); // Fade out
+          setState(() {
+            _isScrolling = false;
+          });
         }
       });
     }
@@ -209,19 +202,6 @@ class _CustomScrollbarThumbState extends State<CustomScrollbarThumb>
   Widget build(BuildContext context) {
     if (!widget.scrollController.hasClients) return const SizedBox();
 
-    // Get theme data for scrollbar
-    final theme = Theme.of(context);
-    final scrollbarTheme = theme.scrollbarTheme;
-    final Set<MaterialState> currentStates = {
-      if (_isDragging) MaterialState.dragged,
-      if (_isHovering) MaterialState.hovered,
-    };
-
-    final effectiveThickness = scrollbarTheme.thickness?.resolve(currentStates) ?? widget.thickness;
-    final effectiveThumbColor = scrollbarTheme.thumbColor?.resolve(currentStates) ?? theme.colorScheme.onSurface.withOpacity(0.5);
-    final effectiveRadius = scrollbarTheme.radius ?? Radius.circular(effectiveThickness / 2);
-    final showScrollbar = scrollbarTheme.thumbVisibility?.resolve(currentStates) ?? (_isDragging || _isHovering || _isScrolling);
-
     try {
       final ScrollPosition position = widget.scrollController.position;
       final double viewportDimension = position.viewportDimension;
@@ -231,31 +211,18 @@ class _CustomScrollbarThumbState extends State<CustomScrollbarThumb>
       
       final double thumbLength = widget.minThumbLength;
       final double trackHeight = viewportDimension;
-      
-      // Control visibility with AnimatedOpacity tied to the controller
-      if (showScrollbar && _thumbAnimationController.status == AnimationStatus.dismissed) {
-          _thumbAnimationController.forward();
-      } else if (!showScrollbar && (_thumbAnimationController.status == AnimationStatus.completed || _thumbAnimationController.status == AnimationStatus.forward)) {
-          _thumbAnimationController.reverse();
-      }
+      final bool shouldShowScrollbar = _isDragging || _isHovering || _isScrolling;
       
       return MouseRegion(
-        onEnter: (_) => setState(() {
-           _isHovering = true;
-           if (scrollbarTheme.thumbVisibility?.resolve({MaterialState.hovered}) ?? true) {
-              _thumbAnimationController.forward(); // Fade in on hover if theme allows
-           }
-        }),
+        onEnter: (_) => setState(() => _isHovering = true),
         onExit: (_) => setState(() {
           _isHovering = false;
+          // Start timer to hide thumb if not dragging
           if (!_isDragging) {
             _scrollVisibilityTimer?.cancel();
-            _scrollVisibilityTimer = Timer(const Duration(milliseconds: 800), () {
+            _scrollVisibilityTimer = Timer(const Duration(milliseconds: 400), () {
               if (mounted && !_isDragging && !_isHovering) {
                 setState(() => _isScrolling = false);
-                 if (!(scrollbarTheme.thumbVisibility?.resolve({}) ?? true)) { // Check if always visible
-                   _thumbAnimationController.reverse(); // Fade out only if not always visible
-                 }
               }
             });
           }
@@ -264,21 +231,24 @@ class _CustomScrollbarThumbState extends State<CustomScrollbarThumb>
           onVerticalDragStart: _startDrag,
           onVerticalDragUpdate: _updateDrag,
           onVerticalDragEnd: _endDrag,
-          child: FadeTransition(
-            opacity: _thumbOpacityAnimation,
+          child: AnimatedOpacity(
+            opacity: shouldShowScrollbar ? 1.0 : 0.0,
+            duration: const Duration(milliseconds: 200),
             child: Container(
-              width: effectiveThickness + 4, // Add padding for easier grabbing
+              // Increased width for easier grabbing on desktop/web
+              width: widget.thickness + 6, 
               height: trackHeight,
               alignment: Alignment.topRight,
-              color: Colors.transparent, // Make outer container transparent
+              color: Colors.transparent, // Make outer container transparent for MouseRegion
               child: Transform.translate(
                 offset: Offset(0, _currentThumbOffset),
                 child: Container(
-                  width: effectiveThickness,
+                  width: widget.thickness,
                   height: thumbLength,
                   decoration: BoxDecoration(
-                    color: effectiveThumbColor,
-                    borderRadius: BorderRadius.all(effectiveRadius),
+                    // Use provided color with opacity based on drag state
+                    color: widget.color.withOpacity(_isDragging ? 1.0 : 0.6),
+                    borderRadius: BorderRadius.circular(widget.thickness / 2),
                   ),
                 ),
               ),
@@ -287,7 +257,8 @@ class _CustomScrollbarThumbState extends State<CustomScrollbarThumb>
         ),
       );
     } catch (e) {
-      print("Error building scrollbar thumb: $e"); // Log errors
+      // Added basic error logging
+      print("Error building CustomScrollbarThumb: $e"); 
       return const SizedBox();
     }
   }
@@ -420,6 +391,14 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
      _showModelSelector(context, _chatProvider); // Reuse existing dialog logic
   }
 
+  void _navigateToSettings() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => const SettingsScreen(),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -430,47 +409,129 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
     return Scaffold(
       backgroundColor: colorScheme.background,
-      body: Row(
+      body: Stack(
         children: [
-          // Animated side panel
-          AnimatedContainer(
-             duration: const Duration(milliseconds: 250),
-             curve: Curves.easeOutCubic,
-             width: _isSidePanelVisible ? math.min(MediaQuery.of(context).size.width * 0.8, 300.0) : 0,
-             child: _isSidePanelVisible 
-                 ? SidePanel(
-                     isExpanded: _isSidePanelVisible,
-                     onToggle: _toggleSidePanel,
-                     onNewChat: () {
-                       _focusInputField();
-                       if (!kIsWeb && MediaQuery.of(context).size.width < 600) {
-                         _toggleSidePanel(); // Close on mobile after new chat
-                       }
-                     },
-                   )
-                 : null,
+          // Main content with side panel row (positioned under the app bar)
+          Positioned.fill(
+            top: MediaQuery.of(context).padding.top + 64, // Account for app bar height + status bar
+            child: Row(
+              children: [
+                // Animated side panel
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 250),
+                  curve: Curves.easeOutCubic,
+                  width: _isSidePanelVisible ? math.min(MediaQuery.of(context).size.width * 0.8, 300.0) : 0,
+                  child: _isSidePanelVisible
+                      ? SidePanel(
+                          isExpanded: _isSidePanelVisible,
+                          onToggle: _toggleSidePanel,
+                          onNewChat: () {
+                            _focusInputField();
+                            if (!kIsWeb && MediaQuery.of(context).size.width < 600) {
+                              _toggleSidePanel(); // Close on mobile after new chat
+                            }
+                          },
+                        )
+                      : null,
+                ),
+                
+                // Main Chat Content Area
+                Expanded(
+                  child: Column(
+                    children: [
+                      // Token usage visualization (if visible)
+                      if (_isTokenWindowVisible && chatProvider.totalTokens > 0)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: AppSpacing.pagePaddingHorizontal,
+                            vertical: AppSpacing.inlineSpacingSmall,
+                          ),
+                          child: TokenWindowVisualization(
+                            totalTokens: chatProvider.totalTokens,
+                            inputTokens: chatProvider.totalInputTokens,
+                            outputTokens: chatProvider.totalOutputTokens,
+                            model: chatProvider.selectedModel,
+                            totalCost: chatProvider.totalCost,
+                          ),
+                        ),
+                      
+                      // Main chat messages area
+                      Expanded(
+                        child: Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            ChatContainer(
+                              child: _buildMessagesList(chatProvider),
+                            ),
+                            // Positioned Scrollbar
+                            Positioned(
+                              right: 2, 
+                              top: 0,
+                              bottom: 0,
+                              child: CustomScrollbarThumb(
+                                scrollController: _scrollManager.controller,
+                                // Using theme color as fallback for missing AppColors
+                                color: theme.colorScheme.onSurface.withOpacity(0.5), 
+                              ),
+                            ),
+                            // Error Message Overlay
+                            if (chatProvider.error != null)
+                              Positioned(
+                                bottom: 80, // Position above input
+                                left: AppSpacing.pagePaddingHorizontal,
+                                right: AppSpacing.pagePaddingHorizontal,
+                                child: _buildErrorMessage(chatProvider),
+                              ),
+                          ],
+                        ),
+                      ),
+                      
+                      // Message input area
+                      ChatContainer(
+                        child: Padding(
+                          padding: EdgeInsets.only(
+                            bottom: MediaQuery.of(context).padding.bottom + AppSpacing.inlineSpacing, // SafeArea bottom + padding
+                            left: AppSpacing.inlineSpacing, // Add consistent padding
+                            right: AppSpacing.inlineSpacing,
+                          ),
+                          child: _buildMessageInput(chatProvider, isAuthenticated),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
           
-          // Main Chat Content Area
-          Expanded(
-            child: Column(
-              children: [
-                // --- Top Control Row --- 
-                Padding(
-                  padding: EdgeInsets.only(
-                     left: AppSpacing.inlineSpacing, 
-                     right: AppSpacing.pagePaddingHorizontal,
-                     top: MediaQuery.of(context).padding.top + AppSpacing.inlineSpacingSmall, // SafeArea top + padding
-                     bottom: AppSpacing.inlineSpacingSmall,
+          // Top Navigation Bar (fixed at the top, above all content)
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: Material(
+              elevation: 8,
+              shadowColor: theme.colorScheme.shadow.withOpacity(0.3),
+              color: theme.colorScheme.surface,
+              child: Container(
+                padding: EdgeInsets.only(
+                  top: MediaQuery.of(context).padding.top, // Account for status bar
+                ),
+                height: MediaQuery.of(context).padding.top + 48, // Even more reduced height
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.pagePaddingHorizontal, 
                   ),
                   child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center, // This should now center within the 48dp height
                     children: [
                       // Hamburger Menu Toggle
-                      IconButton(
-                        icon: Icon(_isSidePanelVisible ? Icons.close : Icons.menu),
+                      _buildIconButton(
+                        icon: _isSidePanelVisible ? Icons.close : Icons.menu,
                         tooltip: _isSidePanelVisible ? 'Close Panel' : 'Open Panel',
                         onPressed: _toggleSidePanel,
-                        color: colorScheme.onSurface.withOpacity(0.7),
+                        colorScheme: colorScheme,
+                        // Removed useAccentColor for hamburger
                       ),
                       const SizedBox(width: AppSpacing.inlineSpacing),
                       // Model Selector Button
@@ -481,77 +542,26 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                       const Spacer(), // Pushes token window toggle right
                       // Token Window Toggle (Optional)
                       if (chatProvider.totalTokens > 0)
-                         IconButton(
-                           icon: Icon(
-                             _isTokenWindowVisible ? Icons.insights_rounded : Icons.insights_outlined,
-                             size: 20,
-                             color: colorScheme.onSurface.withOpacity(0.7),
-                           ),
-                           onPressed: _toggleTokenWindow,
-                           tooltip: _isTokenWindowVisible ? 'Hide Token Usage' : 'Show Token Usage',
-                         ),
+                        _buildIconButton(
+                          icon: _isTokenWindowVisible ? Icons.insights_rounded : Icons.insights_outlined,
+                          tooltip: _isTokenWindowVisible ? 'Hide Token Usage' : 'Show Token Usage',
+                          onPressed: _toggleTokenWindow,
+                          colorScheme: colorScheme,
+                          useAccentColor: true,
+                        ),
+                      const SizedBox(width: 6), // Reduced spacing
+                      // Settings Button
+                      _buildIconButton(
+                        icon: Icons.settings_outlined,
+                        tooltip: 'Settings',
+                        onPressed: _navigateToSettings,
+                        colorScheme: colorScheme,
+                        useAccentColor: true,
+                      ),
                     ],
                   ),
                 ),
-                // --- End Top Control Row ---
-
-                // Token usage visualization (if visible)
-                if (_isTokenWindowVisible && chatProvider.totalTokens > 0)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: AppSpacing.pagePaddingHorizontal,
-                      vertical: AppSpacing.inlineSpacingSmall,
-                    ),
-                    child: TokenWindowVisualization(
-                      totalTokens: chatProvider.totalTokens,
-                      inputTokens: chatProvider.totalInputTokens,
-                      outputTokens: chatProvider.totalOutputTokens,
-                      model: chatProvider.selectedModel,
-                      totalCost: chatProvider.totalCost,
-                    ),
-                  ),
-                
-                // Main chat messages area
-                Expanded(
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      ChatContainer(
-                        child: _buildMessagesList(chatProvider),
-                      ),
-                      // Positioned Scrollbar
-                      Positioned(
-                        right: 2, 
-                        top: 0,
-                        bottom: 0,
-                        child: CustomScrollbarThumb(
-                          scrollController: _scrollManager.controller,
-                        ),
-                      ),
-                      // Error Message Overlay
-                      if (chatProvider.error != null)
-                        Positioned(
-                          bottom: 80, // Position above input
-                          left: AppSpacing.pagePaddingHorizontal,
-                          right: AppSpacing.pagePaddingHorizontal,
-                          child: _buildErrorMessage(chatProvider),
-                        ),
-                    ],
-                  ),
-                ),
-                
-                // Message input area
-                ChatContainer(
-                  child: Padding(
-                    padding: EdgeInsets.only(
-                      bottom: MediaQuery.of(context).padding.bottom + AppSpacing.inlineSpacing, // SafeArea bottom + padding
-                      left: AppSpacing.inlineSpacing, // Add consistent padding
-                      right: AppSpacing.inlineSpacing,
-                    ),
-                    child: _buildMessageInput(chatProvider, isAuthenticated),
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         ],
@@ -1084,6 +1094,47 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           ],
         );
       },
+    );
+  }
+
+  // Helper method to build consistent icon buttons
+  Widget _buildIconButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onPressed,
+    required ColorScheme colorScheme,
+    bool useAccentColor = false,
+  }) {
+    // Removed the outer Center wrapper
+    return Container(
+      decoration: BoxDecoration(
+        // Always transparent background
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(8), // Smaller radius
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8), // Match container
+          onTap: onPressed,
+          child: Padding(
+            padding: const EdgeInsets.all(6.0), // Further reduced padding
+            child: Tooltip(
+              message: tooltip,
+              child: Center( // Explicitly center the icon
+                child: Icon(
+                  icon,
+                  size: 22, // Reduced icon size again
+                  // Icon color still uses accent when requested
+                  color: useAccentColor
+                      ? colorScheme.primary
+                      : colorScheme.onSurface.withOpacity(0.8),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
