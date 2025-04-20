@@ -14,66 +14,33 @@ import '../theme/app_spacing.dart'; // Import AppSpacing
 // Removed intl import as cost info is removed
 
 class SidePanel extends StatefulWidget {
-  final bool isExpanded;
-  final Duration animationDuration;
-  final VoidCallback onToggle;
   final VoidCallback? onNewChat;
 
   const SidePanel({
     Key? key,
-    required this.isExpanded,
-    required this.onToggle,
     this.onNewChat,
-    this.animationDuration = const Duration(milliseconds: 250),
   }) : super(key: key);
 
   @override
   State<SidePanel> createState() => _SidePanelState();
 }
 
-class _SidePanelState extends State<SidePanel> with TickerProviderStateMixin {
-  late AnimationController _animationController;
-  late Animation<double> _slideAnimation;
-  late Animation<double> _opacityAnimation;
+class _SidePanelState extends State<SidePanel> {
   bool _isDebugInfoExpanded = false; // State for debug section expansion
   int? _hoveredIndex; // State to track hovered conversation index
 
   @override
   void initState() {
     super.initState();
-    _animationController = AnimationController(
-      duration: widget.animationDuration,
-      vsync: this,
-      value: widget.isExpanded ? 1.0 : 0.0,
-    );
-    
-    _slideAnimation = CurvedAnimation(
-      parent: _animationController,
-      curve: Curves.fastOutSlowIn,
-    );
-    
-    _opacityAnimation = CurvedAnimation(
-      parent: _animationController,
-      curve: const Interval(0.2, 1.0, curve: Curves.easeOut),
-    );
   }
 
   @override
   void didUpdateWidget(SidePanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    
-    if (oldWidget.isExpanded != widget.isExpanded) {
-      if (widget.isExpanded) {
-        _animationController.forward();
-      } else {
-        _animationController.reverse();
-      }
-    }
   }
   
   @override
   void dispose() {
-    _animationController.dispose();
     super.dispose();
   }
 
@@ -81,111 +48,37 @@ class _SidePanelState extends State<SidePanel> with TickerProviderStateMixin {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final screenWidth = MediaQuery.of(context).size.width;
-    final panelWidth = math.min(screenWidth * 0.8, 300.0);
     final chatProvider = context.watch<ChatProvider>();
     
-    return SizedBox(
-      width: screenWidth,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          AnimatedBuilder(
-            animation: _slideAnimation,
-            builder: (context, child) {
-              final slideValue = _slideAnimation.value;
-              
-              return Align(
-                alignment: Alignment.centerLeft,
-                child: Transform.translate(
-                  offset: Offset((slideValue - 1) * panelWidth, 0),
-                  child: Container(
-                    width: panelWidth,
-                    height: double.infinity,
-                    decoration: BoxDecoration(
-                      color: colorScheme.surface,
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.1),
-                          blurRadius: 4,
-                          offset: const Offset(2, 0),
-                        ),
-                      ],
-                      border: Border(
-                        right: BorderSide(color: colorScheme.outline.withOpacity(0.3), width: 1),
-                      ),
-                    ),
-                    child: FadeTransition(
-                      opacity: _opacityAnimation,
-                      child: SafeArea(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            _buildHeader(theme, panelWidth),
-                            const SizedBox(height: AppSpacing.inlineSpacing),
-                            _buildNewConversationButton(theme, chatProvider),
-                            const SizedBox(height: AppSpacing.blockSpacing),
-                            Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.pagePaddingHorizontal / 2),
-                              child: AnimatedSwitcher(
-                                duration: Duration.zero,
-                                child: _slideAnimation.value > 0.8
-                                    ? Text(
-                                        'Conversations',
-                                        key: const ValueKey('conversations_text'),
-                                        style: theme.textTheme.titleSmall?.copyWith(
-                                          color: colorScheme.onSurface.withOpacity(0.6),
-                                          fontWeight: FontWeight.w500,
-                                          fontSize: 13,
-                                        ),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.clip,
-                                      )
-                                    : const SizedBox.shrink(key: ValueKey('empty_space')),
-                              ),
-                            ),
-                            const SizedBox(height: AppSpacing.inlineSpacingSmall),
-                            Expanded(
-                              child: FadeTransition(
-                                opacity: _opacityAnimation,
-                                child: _buildConversationList(theme, chatProvider),
-                              ),
-                            ),
-                            const Divider(height: 1),
-                            _buildFooter(theme),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
+    return Container(
+      color: colorScheme.surface,
+      child: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(height: AppSpacing.inlineSpacing),
+            _buildNewConversationButton(theme, chatProvider),
+            const SizedBox(height: AppSpacing.blockSpacing),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.pagePaddingHorizontal / 2),
+              child: Text(
+                'Conversations',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  color: colorScheme.onSurface.withOpacity(0.6),
+                  fontWeight: FontWeight.w500,
+                  fontSize: 13,
                 ),
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildHeader(ThemeData theme, double panelWidth) {
-    return Padding(
-      padding: const EdgeInsets.only(
-        left: AppSpacing.inlineSpacing,
-        right: AppSpacing.inlineSpacing,
-        top: AppSpacing.inlineSpacing,
-        bottom: 0,
-      ),
-      child: Align(
-        alignment: Alignment.centerRight,
-        child: IconButton(
-          icon: const Icon(Icons.close),
-          iconSize: 20,
-          tooltip: 'Close panel',
-          onPressed: widget.onToggle,
-          color: theme.colorScheme.onSurface.withOpacity(0.7),
-          padding: EdgeInsets.zero,
-          constraints: const BoxConstraints(),
-          visualDensity: VisualDensity.compact,
+                maxLines: 1,
+                overflow: TextOverflow.clip,
+              ),
+            ),
+            const SizedBox(height: AppSpacing.inlineSpacingSmall),
+            Expanded(
+              child: _buildConversationList(theme, chatProvider),
+            ),
+            const Divider(height: 1),
+            _buildFooter(theme),
+          ],
         ),
       ),
     );
@@ -200,10 +93,8 @@ class _SidePanelState extends State<SidePanel> with TickerProviderStateMixin {
         child: ElevatedButton(
           onPressed: () {
             chatProvider.requestNewConversation();
-            widget.onNewChat?.call();
-            if (!kIsWeb && MediaQuery.of(context).size.width < 600) {
-              widget.onToggle();
-            }
+            // Restore drawer pop
+            Navigator.of(context).pop();
           },
           style: ElevatedButton.styleFrom(
             backgroundColor: theme.colorScheme.primaryContainer,
@@ -212,26 +103,21 @@ class _SidePanelState extends State<SidePanel> with TickerProviderStateMixin {
           ),
           child: LayoutBuilder(
             builder: (context, constraints) {
-              if (constraints.maxWidth < 50) {
-                return const Icon(Icons.add_circle_outline_rounded, size: 18);
-              }
               return Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   const Icon(Icons.add_circle_outline_rounded, size: 18),
-                  if (constraints.maxWidth >= 100) ...[
-                    const SizedBox(width: 8),
-                    Flexible(
-                      child: Text(
-                        'New Chat',
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                        ),
-                        overflow: TextOverflow.ellipsis,
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      'New Chat',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
                       ),
+                      overflow: TextOverflow.ellipsis,
                     ),
-                  ],
+                  ),
                 ],
               );
             },
@@ -249,299 +135,319 @@ class _SidePanelState extends State<SidePanel> with TickerProviderStateMixin {
     if (chatProvider.conversationList.isEmpty) {
       return Center(
         child: Padding(
-          padding: const EdgeInsets.all(AppSpacing.blockSpacing),
+          padding: const EdgeInsets.all(AppSpacing.pagePaddingHorizontal),
           child: Text(
-            'No past conversations.',
+            'No conversations yet.',
+            style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.outline),
             textAlign: TextAlign.center,
-            style: theme.textTheme.bodyMedium?.copyWith(
-              color: theme.colorScheme.onSurface.withOpacity(0.6),
-              fontSize: 13,
-            ),
           ),
         ),
       );
     }
 
     return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.inlineSpacingSmall),
       itemCount: chatProvider.conversationList.length,
       itemBuilder: (context, index) {
         final conversation = chatProvider.conversationList[index];
         final isSelected = chatProvider.conversationId == conversation.id;
         final isHovered = _hoveredIndex == index;
-        final isMobile = !kIsWeb && (Theme.of(context).platform == TargetPlatform.android || Theme.of(context).platform == TargetPlatform.iOS);
 
         return MouseRegion(
           onEnter: (_) => setState(() => _hoveredIndex = index),
           onExit: (_) => setState(() => _hoveredIndex = null),
-          child: ListTile(
-            dense: true,
-            visualDensity: VisualDensity.compact,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-            title: LayoutBuilder(
-              builder: (context, constraints) {
-                return Row(
+          child: Material(
+            color: isSelected ? theme.colorScheme.primaryContainer.withOpacity(0.4) : Colors.transparent,
+            child: InkWell(
+              onTap: () {
+                chatProvider.loadConversation(conversation.id);
+                Navigator.of(context).pop();
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.pagePaddingHorizontal / 2,
+                  vertical: AppSpacing.verticalPaddingSmall / 1.5,
+                ),
+                child: Row(
                   children: [
                     Expanded(
                       child: Text(
                         conversation.title ?? 'New Conversation',
                         style: theme.textTheme.bodyMedium?.copyWith(
-                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                          color: isSelected ? theme.colorScheme.primary : theme.colorScheme.onSurface.withOpacity(0.9),
-                          fontSize: 13,
+                          fontWeight: isSelected ? FontWeight.w500 : FontWeight.normal,
+                          color: isSelected ? theme.colorScheme.primary : theme.colorScheme.onSurface,
                         ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    if (isHovered || isMobile)
-                      SizedBox(
-                        width: 24,
-                        height: 24,
-                        child: _buildConversationMenu(context, theme, chatProvider, conversation),
+                    if (isHovered || isSelected)
+                      IconButton(
+                        icon: const Icon(Icons.delete_outline, size: 18),
+                        color: theme.colorScheme.error.withOpacity(0.7),
+                        tooltip: 'Delete Conversation',
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                        onPressed: () => _confirmDeleteConversation(context, chatProvider, conversation),
                       ),
                   ],
-                );
-              },
+                ),
+              ),
             ),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppSpacing.borderRadiusMedium)),
-            selected: isSelected,
-            selectedTileColor: theme.colorScheme.primary.withOpacity(0.15),
-            hoverColor: theme.colorScheme.onSurface.withOpacity(0.05),
-            onTap: () {
-              if (!isSelected) {
-                chatProvider.loadConversation(conversation.id);
-                if (!kIsWeb && MediaQuery.of(context).size.width < 600) {
-                  widget.onToggle();
-                }
-              }
-            },
           ),
         );
       },
     );
   }
-
-  Widget _buildConversationMenu(BuildContext context, ThemeData theme, ChatProvider chatProvider, ConversationSummary conversation) {
-    return PopupMenuButton<String>(
-      icon: Icon(Icons.more_vert, size: 16, color: theme.colorScheme.onSurface.withOpacity(0.6)),
-      tooltip: 'Conversation options',
-      padding: EdgeInsets.zero,
-      position: PopupMenuPosition.under,
-      itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
-        PopupMenuItem<String>(
-          value: 'rename',
-          height: 36,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.edit_outlined, size: 16, color: theme.colorScheme.onSurface),
-              const SizedBox(width: 8),
-              Text('Rename', style: TextStyle(fontSize: 13)),
-            ],
-          ),
-        ),
-        PopupMenuItem<String>(
-          value: 'delete',
-          height: 36,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.delete_outline, size: 16, color: theme.colorScheme.error),
-              const SizedBox(width: 8),
-              Text('Delete', style: TextStyle(fontSize: 13, color: theme.colorScheme.error)),
-            ],
-          ),
-        ),
-      ],
-      onSelected: (String result) {
-        switch (result) {
-          case 'rename':
-            _showRenameDialog(context, theme, chatProvider, conversation);
-            break;
-          case 'delete':
-            _showDeleteConfirmationDialog(context, theme, chatProvider, conversation);
-            break;
-        }
-      },
-    );
-  }
-
-  void _showRenameDialog(BuildContext context, ThemeData theme, ChatProvider chatProvider, ConversationSummary conversation) {
-    final TextEditingController renameController = TextEditingController(text: conversation.title);
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Rename Conversation'),
-        content: TextField(
-          controller: renameController,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: 'Enter new title'),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          TextButton(
-            onPressed: () {
-              final newTitle = renameController.text.trim();
-              if (newTitle.isNotEmpty) {
-                chatProvider.renameConversation(conversation.id, newTitle);
-                Navigator.pop(context);
-              }
-            },
-            child: const Text('Rename'),
-          ),
-        ],
-         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppSpacing.borderRadiusLarge)),
-         backgroundColor: theme.colorScheme.surface,
-      ),
-    );
-  }
-
-  void _showDeleteConfirmationDialog(BuildContext context, ThemeData theme, ChatProvider chatProvider, ConversationSummary conversation) {
-    showDialog(
+  
+  Future<void> _confirmDeleteConversation(BuildContext context, ChatProvider chatProvider, ConversationSummary conversation) async {
+    final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Delete Conversation?'),
-        content: Text('Are you sure you want to delete "${conversation.title ?? 'this conversation'}"? This cannot be undone.'),
+        content: Text('Are you sure you want to delete "${conversation.title ?? 'this conversation'}"? This action cannot be undone.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
           TextButton(
-            onPressed: () {
-              chatProvider.deleteConversation(conversation.id);
-              Navigator.pop(context);
-            },
-            style: TextButton.styleFrom(foregroundColor: theme.colorScheme.error),
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: TextButton.styleFrom(foregroundColor: Theme.of(context).colorScheme.error),
             child: const Text('Delete'),
           ),
         ],
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppSpacing.borderRadiusLarge)),
-        backgroundColor: theme.colorScheme.surface,
       ),
     );
+
+    if (confirm == true) {
+      await chatProvider.deleteConversation(conversation.id);
+
+      if (mounted && chatProvider.error != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to delete conversation: ${chatProvider.error}'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+        chatProvider.clearError();
+      }
+    }
   }
 
   Widget _buildFooter(ThemeData theme) {
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final displayName = authProvider.currentUser?.name ?? authProvider.currentUser?.username ?? 'User';
     final colorScheme = theme.colorScheme;
+    final chatProvider = context.watch<ChatProvider>();
 
     return Padding(
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.inlineSpacingSmall,
-        vertical: AppSpacing.inlineSpacing,
-      ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          const double minWidthForLabels = 70.0; // Reuse or define a suitable width
-
-          if (constraints.maxWidth < minWidthForLabels) {
-            // Narrow layout: Column with icon-only buttons
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.center, // Center items in narrow mode
+      padding: const EdgeInsets.all(AppSpacing.inlineSpacing),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              CircleAvatar(
+                radius: 14,
+                backgroundColor: theme.colorScheme.secondaryContainer,
+                child: Text(
+                  authProvider.currentUser?.name.substring(0, 1).toUpperCase() ?? '?',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: theme.colorScheme.onSecondaryContainer,
+                  ),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.inlineSpacingSmall),
+              Expanded(
+                child: Text(
+                  displayName,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w500,
+                    fontSize: 13,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                ),
+              ),
+              const SizedBox(width: AppSpacing.inlineSpacingSmall),
+              const ThemeToggle(showLabel: true),
+              const SizedBox(height: AppSpacing.inlineSpacingSmall),
+              SizedBox(
+                width: 24,
+                height: 24,
+                child: IconButton(
+                  icon: const Icon(Icons.logout, size: 18),
+                  tooltip: 'Sign Out',
+                  onPressed: () {
+                    if (Scaffold.of(context).isDrawerOpen) {
+                      Navigator.of(context).pop();
+                    }
+                    _showSignOutConfirmation(context, theme, authProvider);
+                  },
+                  color: colorScheme.onSurface.withOpacity(0.7),
+                  padding: EdgeInsets.zero,
+                  visualDensity: VisualDensity.compact,
+                  constraints: const BoxConstraints(minWidth: 24, minHeight: 24, maxWidth: 24, maxHeight: 24),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.inlineSpacingSmall),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              TextButton.icon(
+                icon: const Icon(Icons.file_upload_outlined, size: 18),
+                label: const Text('Export Keys'),
+                style: TextButton.styleFrom(
+                  foregroundColor: theme.colorScheme.onSurface.withOpacity(0.7),
+                  textStyle: theme.textTheme.bodySmall,
+                ),
+                onPressed: () {
+                  if (Scaffold.of(context).isDrawerOpen) {
+                    Navigator.of(context).pop();
+                  }
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (context) => const ExportKeyScreen()),
+                  );
+                },
+              ),
+              TextButton.icon(
+                icon: const Icon(Icons.file_download_outlined, size: 18),
+                label: const Text('Import Keys'),
+                style: TextButton.styleFrom(
+                  foregroundColor: theme.colorScheme.onSurface.withOpacity(0.7),
+                  textStyle: theme.textTheme.bodySmall,
+                ),
+                onPressed: () {
+                  if (Scaffold.of(context).isDrawerOpen) {
+                    Navigator.of(context).pop();
+                  }
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (context) => const ImportKeyScreen()),
+                  );
+                },
+              ),
+            ],
+          ),
+          if (kDebugMode) ...[
+            const Divider(height: AppSpacing.blockSpacing),
+            ExpansionTile(
+              title: Text(
+                'Debug Info',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
+              ),
+              tilePadding: EdgeInsets.zero,
+              initiallyExpanded: _isDebugInfoExpanded,
+              onExpansionChanged: (expanded) {
+                setState(() => _isDebugInfoExpanded = expanded);
+              },
               children: [
-                // Simplified display name (optional, maybe just icon if super narrow?)
-                Icon(Icons.account_circle, size: 24, color: colorScheme.primary), 
-                const SizedBox(height: AppSpacing.inlineSpacingSmall),
-                const SizedBox( // Ensure ThemeToggle gets its constrained space
-                  width: 24, 
-                  height: 24,
-                  child: ThemeToggle(), // showLabel will be false here implicitly via LayoutBuilder
-                ),
-                const SizedBox(height: AppSpacing.inlineSpacingSmall),
-                 // Icon Button for Sign Out
-                SizedBox(
-                  width: 24,
-                  height: 24,
-                  child: IconButton(
-                    icon: const Icon(Icons.logout, size: 18),
-                    tooltip: 'Sign Out',
-                    onPressed: () => _showSignOutConfirmation(context, theme, authProvider),
-                    color: colorScheme.onSurface.withOpacity(0.7),
-                    padding: EdgeInsets.zero,
-                    visualDensity: VisualDensity.compact,
-                    constraints: const BoxConstraints(minWidth: 24, minHeight: 24, maxWidth: 24, maxHeight: 24),
-                  ),
-                ),
+                _buildDebugInfoRow('Username:', authProvider.currentUser?.username ?? 'N/A'),
+                _buildDebugInfoRow('Conv ID:', chatProvider.conversationId ?? 'None'),
+                _buildDebugInfoRow('Messages:', chatProvider.messages.length.toString()),
+                _buildDebugInfoRow('Loading Chat:', chatProvider.isLoading.toString()),
+                _buildDebugInfoRow('Loading Conv List:', chatProvider.isLoadingConversations.toString()),
+                _buildDebugInfoRow('Selected Model:', chatProvider.selectedModel?.modelId ?? 'None'),
+                _buildDebugInfoRow('Available Models:', chatProvider.availableModels.length.toString()),
+                _buildDebugInfoRow('Error:', chatProvider.error ?? 'None'),
               ],
-            );
-          } else {
-             // Wider narrow layout: Original Column with labels
-             return Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start, // Original alignment
-                children: [
-                  Text(
-                    displayName,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      fontWeight: FontWeight.w500,
-                      fontSize: 13,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                    maxLines: 1,
-                  ),
-                  const SizedBox(height: AppSpacing.inlineSpacingSmall),
-                  // ThemeToggle will decide internally if label fits
-                  const ThemeToggle(showLabel: true), 
-                  const SizedBox(height: AppSpacing.inlineSpacingSmall),
-                  InkWell(
-                    onTap: () => _showSignOutConfirmation(context, theme, authProvider),
-                    borderRadius: BorderRadius.circular(4), // Add radius
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 4),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.logout,
-                            size: 18,
-                            color: colorScheme.onSurface.withOpacity(0.7),
-                          ),
-                          const SizedBox(width: 8),
-                          // Use Flexible just in case, though width check should prevent overflow
-                          Flexible( 
-                            child: Text(
-                              'Sign Out',
-                              style: theme.textTheme.bodyMedium?.copyWith(
-                                color: colorScheme.onSurface.withOpacity(0.7),
-                                fontSize: 13,
-                              ),
-                              overflow: TextOverflow.ellipsis, // Add ellipsis
-                              maxLines: 1,                      // Ensure single line
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              );
-          }
-        },
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDebugInfoRow(String label, String value) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2.0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '$label ', 
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.outline,
+              fontWeight: FontWeight.w500,
+            )
+          ),
+          Expanded(
+            child: SelectableText(
+              value, 
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+            ),
+          ),
+        ],
       ),
     );
   }
 
   Future<void> _showSignOutConfirmation(BuildContext context, ThemeData theme, AuthProvider authProvider) async {
+    final isDark = theme.brightness == Brightness.dark;
+
     return showDialog(
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
-          title: const Text('Sign Out'),
-          content: const Text('Are you sure you want to sign out?'),
+          backgroundColor: isDark 
+              ? Color.lerp(theme.colorScheme.surface, Colors.black, 0.3)
+              : Color.lerp(theme.colorScheme.surface, Colors.white, 0.3),
+          surfaceTintColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          title: Text(
+            'Sign Out',
+            style: theme.textTheme.titleLarge?.copyWith(
+              color: theme.colorScheme.onSurface,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          content: Text(
+            'Are you sure you want to sign out?',
+            style: theme.textTheme.bodyLarge?.copyWith(
+              color: theme.colorScheme.onSurface.withOpacity(0.8),
+            ),
+          ),
           actions: [
-            TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel')),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              style: TextButton.styleFrom(
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              child: Text(
+                'Cancel',
+                style: TextStyle(
+                  color: theme.colorScheme.primary.withOpacity(0.8),
+                ),
+              ),
+            ),
             TextButton(
               onPressed: () async {
                 Navigator.of(context).pop();
                 await authProvider.logout();
               },
-              style: TextButton.styleFrom(foregroundColor: theme.colorScheme.error),
-              child: const Text('Sign Out'),
+              style: TextButton.styleFrom(
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              child: Text(
+                'Sign Out',
+                style: TextStyle(
+                  color: theme.colorScheme.error,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             ),
           ],
-           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppSpacing.borderRadiusLarge)),
-           backgroundColor: theme.colorScheme.surface,
         );
       },
     );

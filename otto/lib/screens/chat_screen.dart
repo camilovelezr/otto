@@ -274,9 +274,7 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   final ChatScrollManager _scrollManager = ChatScrollManager();
   final FocusNode _inputFocusNode = FocusNode();
-  bool _isSidePanelVisible = false; // Manage side panel visibility
   bool _isTokenWindowVisible = true;
-  static const String _sidePanelKey = 'side_panel_visible';
   static const String _tokenWindowKey = 'token_window_visible';
   late AnimationController _shimmerController;
   late TextEditingController _messageController;
@@ -297,17 +295,11 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       vsync: this,
     )..repeat();
     _scrollManager.initialize();
-    // _loadSavedStates(); // Keep if you want persistence
+    _loadSavedStates(); // Load token window state only
 
     // Use post frame callback for things needing context/build completion
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return; // Check if widget is still mounted
-      
-      // Set initial side panel visibility
-      final screenWidth = MediaQuery.of(context).size.width;
-      setState(() {
-         _isSidePanelVisible = screenWidth >= 1024; // Example: open on larger screens
-      });
       
       // Add listener and initialize chat logic after first frame
        _chatProvider.addListener(_handleChatUpdate);
@@ -338,28 +330,16 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
   Future<void> _loadSavedStates() async {
     final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _isSidePanelVisible = prefs.getBool(_sidePanelKey) ?? false;
-      _isTokenWindowVisible = prefs.getBool(_tokenWindowKey) ?? true;
-    });
-  }
-
-  Future<void> _saveSidePanelState(bool isVisible) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_sidePanelKey, isVisible);
+    if (mounted) {
+      setState(() {
+        _isTokenWindowVisible = prefs.getBool(_tokenWindowKey) ?? true;
+      });
+    }
   }
 
   Future<void> _saveTokenWindowState(bool isVisible) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_tokenWindowKey, isVisible);
-  }
-
-  void _toggleSidePanel() {
-     setState(() {
-      _isSidePanelVisible = !_isSidePanelVisible;
-       // Optionally save state
-       // _saveSidePanelState(_isSidePanelVisible); 
-    });
   }
 
   void _toggleTokenWindow() {
@@ -370,17 +350,40 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   }
 
   void _handleChatUpdate() {
-    setState(() {});
-    if (_chatProvider.messages.isNotEmpty &&
-        !_chatProvider.messages.last.isUser &&
-        _chatProvider.isLoading) {
-      // Slightly improved logic to scroll when assistant is responding
-      Future.delayed(const Duration(milliseconds: 50), () {
-        if (mounted) {
-          _scrollManager.scrollToBottom(animate: true);
-        }
-      });
-    }
+    // Store previous conversation ID to detect change
+    final previousConversationId = _chatProvider.conversationId;
+
+    // Use WidgetsBinding.instance.addPostFrameCallback to ensure 
+    // state access happens after the build phase triggered by notifyListeners.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return; // Check mount status
+
+      // Check if the conversation ID changed *to* a temporary one
+      final currentConversationId = _chatProvider.conversationId;
+      if (currentConversationId != previousConversationId && 
+          _chatProvider.isTemporaryConversationId(currentConversationId)) {
+         debugPrint('Detected new temporary conversation, focusing input.');
+         _focusInputField(); 
+      }
+
+      // Existing scroll logic
+      if (_chatProvider.messages.isNotEmpty &&
+          !_chatProvider.messages.last.isUser &&
+          _chatProvider.isLoading) {
+        // Slightly improved logic to scroll when assistant is responding
+        Future.delayed(const Duration(milliseconds: 50), () {
+          if (mounted) {
+            _scrollManager.scrollToBottom(animate: true);
+          }
+        });
+      }
+      
+      // Standard setState to update UI based on general provider changes
+      // This needs to be outside the postFrameCallback if other parts of build depend on it directly
+      // However, if it causes issues, move it inside.
+      // Let's try keeping it outside first.
+      setState(() {});
+    });
   }
 
   void _focusInputField() {
@@ -397,6 +400,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         builder: (context) => const SettingsScreen(),
       ),
     );
+    // Close drawer if open when navigating
+    if (Scaffold.of(context).isDrawerOpen) {
+      Navigator.of(context).pop();
+    }
   }
 
   @override
@@ -407,176 +414,201 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final authProvider = context.watch<AuthProvider>();
     final isAuthenticated = authProvider.isAuthenticated;
 
+    // Refactored using Scaffold, AppBar, Drawer
     return Scaffold(
       backgroundColor: colorScheme.background,
-      body: Stack(
-        children: [
-          // Main content with side panel row (positioned under the app bar)
-          Positioned.fill(
-            top: MediaQuery.of(context).padding.top + 64, // Account for app bar height + status bar
-            child: Row(
+      // Use a Builder for the AppBar to get the right Scaffold context for the drawer button
+      appBar: AppBar(
+        // Hamburger icon implicitly added by Scaffold when drawer exists
+        backgroundColor: colorScheme.surface,
+        elevation: 2.0, // Standard AppBar elevation
+        shadowColor: theme.colorScheme.shadow.withOpacity(0.2),
+        toolbarHeight: 48, // Matches our previous bar height
+        titleSpacing: 0, // Reduce default title spacing
+        title: _buildAppBarTitle(context, chatProvider, colorScheme),
+        actions: _buildAppBarActions(context, chatProvider, colorScheme),
+      ),
+      drawer: _buildDrawer(context),
+      body: _buildBody(context, chatProvider, isAuthenticated),
+    );
+  }
+  
+  // Helper to build AppBar title content (Model Selector)
+  Widget _buildAppBarTitle(BuildContext context, ChatProvider chatProvider, ColorScheme colorScheme) {
+    // Use Padding to control spacing if needed
+    return Padding(
+      padding: const EdgeInsets.only(left: 0), // Adjust as needed
+      child: ModelSelectorButton(
+        selectedModel: chatProvider.selectedModel,
+        availableModels: chatProvider.availableModels,
+      ),
+    );
+  }
+
+  // Helper to build AppBar actions (Token, Settings)
+  List<Widget> _buildAppBarActions(BuildContext context, ChatProvider chatProvider, ColorScheme colorScheme) {
+    return [
+      // Token Window Toggle (Optional)
+      if (chatProvider.totalTokens > 0)
+        _buildIconButton(
+          icon: _isTokenWindowVisible ? Icons.insights_rounded : Icons.insights_outlined,
+          tooltip: _isTokenWindowVisible ? 'Hide Token Usage' : 'Show Token Usage',
+          onPressed: _toggleTokenWindow,
+          colorScheme: colorScheme,
+          useAccentColor: true,
+        ),
+      // Settings Button
+      _buildIconButton(
+        icon: Icons.settings_outlined,
+        tooltip: 'Settings',
+        onPressed: _navigateToSettings,
+        colorScheme: colorScheme,
+        useAccentColor: true,
+      ),
+      const SizedBox(width: AppSpacing.inlineSpacingSmall), // Add padding at the end
+    ];
+  }
+
+  // Helper to build the Drawer
+  Widget _buildDrawer(BuildContext context) {
+    return SizedBox(
+      width: math.min(MediaQuery.of(context).size.width * 0.8, 300.0), // Set drawer width
+      child: SidePanel(
+        // Removed properties related to old expansion logic
+        onNewChat: () {
+          // Delay focus request slightly to allow drawer animation to potentially complete
+          Future.delayed(const Duration(milliseconds: 300), () {
+             if (mounted) { // Check if widget is still mounted after delay
+                _focusInputField();
+             }
+          });
+          // Close drawer after starting new chat (This happens immediately)
+          Navigator.of(context).pop(); 
+        },
+      ),
+    );
+  }
+
+  // Helper to build the Scaffold body
+  Widget _buildBody(BuildContext context, ChatProvider chatProvider, bool isAuthenticated) {
+    final theme = Theme.of(context);
+    // Restore the original Column structure
+    return Column(
+      children: [
+        // --- Restore Token Usage Visualization ---
+        if (_isTokenWindowVisible && chatProvider.totalTokens > 0 && chatProvider.selectedModel != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.pagePaddingHorizontal,
+              vertical: AppSpacing.inlineSpacingSmall,
+            ),
+            child: TokenWindowVisualization(
+              totalTokens: chatProvider.totalTokens,
+              inputTokens: chatProvider.totalInputTokens,
+              outputTokens: chatProvider.totalOutputTokens,
+              model: chatProvider.selectedModel!, // Safe due to null check above
+              totalCost: chatProvider.totalCost,
+            ),
+          ),
+        
+        // Main chat messages area
+        Expanded(
+          child: ClipRect( // Keep ClipRect and Stack structure
+            child: Stack(
               children: [
-                // Animated side panel
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 250),
-                  curve: Curves.easeOutCubic,
-                  width: _isSidePanelVisible ? math.min(MediaQuery.of(context).size.width * 0.8, 300.0) : 0,
-                  child: _isSidePanelVisible
-                      ? SidePanel(
-                          isExpanded: _isSidePanelVisible,
-                          onToggle: _toggleSidePanel,
-                          onNewChat: () {
-                            _focusInputField();
-                            if (!kIsWeb && MediaQuery.of(context).size.width < 600) {
-                              _toggleSidePanel(); // Close on mobile after new chat
-                            }
-                          },
-                        )
-                      : null,
-                ),
+                // Conditionally show Empty State or Message List INSIDE Stack
+                chatProvider.messages.isEmpty
+                  ? _buildEmptyState(context, chatProvider)
+                  : ChatContainer( // Render message list container
+                      key: const ValueKey('message_list_content'), // Add key here
+                      child: _buildMessagesList(chatProvider), 
+                    ),
                 
-                // Main Chat Content Area
-                Expanded(
-                  child: Column(
-                    children: [
-                      // Token usage visualization (if visible)
-                      if (_isTokenWindowVisible && chatProvider.totalTokens > 0)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: AppSpacing.pagePaddingHorizontal,
-                            vertical: AppSpacing.inlineSpacingSmall,
-                          ),
-                          child: TokenWindowVisualization(
-                            totalTokens: chatProvider.totalTokens,
-                            inputTokens: chatProvider.totalInputTokens,
-                            outputTokens: chatProvider.totalOutputTokens,
-                            model: chatProvider.selectedModel,
-                            totalCost: chatProvider.totalCost,
-                          ),
-                        ),
-                      
-                      // Main chat messages area
-                      Expanded(
-                        child: Stack(
-                          clipBehavior: Clip.none,
-                          children: [
-                            ChatContainer(
-                              child: _buildMessagesList(chatProvider),
-                            ),
-                            // Positioned Scrollbar
-                            Positioned(
-                              right: 2, 
-                              top: 0,
-                              bottom: 0,
-                              child: CustomScrollbarThumb(
-                                scrollController: _scrollManager.controller,
-                                // Using theme color as fallback for missing AppColors
-                                color: theme.colorScheme.onSurface.withOpacity(0.5), 
-                              ),
-                            ),
-                            // Error Message Overlay
-                            if (chatProvider.error != null)
-                              Positioned(
-                                bottom: 80, // Position above input
-                                left: AppSpacing.pagePaddingHorizontal,
-                                right: AppSpacing.pagePaddingHorizontal,
-                                child: _buildErrorMessage(chatProvider),
-                              ),
-                          ],
-                        ),
-                      ),
-                      
-                      // Message input area
-                      ChatContainer(
-                        child: Padding(
-                          padding: EdgeInsets.only(
-                            bottom: MediaQuery.of(context).padding.bottom + AppSpacing.inlineSpacing, // SafeArea bottom + padding
-                            left: AppSpacing.inlineSpacing, // Add consistent padding
-                            right: AppSpacing.inlineSpacing,
-                          ),
-                          child: _buildMessageInput(chatProvider, isAuthenticated),
-                        ),
-                      ),
-                    ],
+                // Scrollbar is always present in the Stack, but CustomScrollbarThumb handles its own visibility
+                Positioned(
+                  right: 2, 
+                  top: 0,
+                  bottom: 0,
+                  child: CustomScrollbarThumb(
+                    scrollController: _scrollManager.controller,
+                    color: theme.colorScheme.onSurface.withOpacity(0.5), 
                   ),
                 ),
+                // Error Message Overlay (always potentially present)
+                if (chatProvider.error != null)
+                  Positioned(
+                    bottom: 80, // Position above input
+                    left: AppSpacing.pagePaddingHorizontal,
+                    right: AppSpacing.pagePaddingHorizontal,
+                    child: _buildErrorMessage(chatProvider),
+                  ),
               ],
             ),
           ),
-          
-          // Top Navigation Bar (fixed at the top, above all content)
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: Material(
-              elevation: 8,
-              shadowColor: theme.colorScheme.shadow.withOpacity(0.3),
-              color: theme.colorScheme.surface,
-              child: Container(
-                padding: EdgeInsets.only(
-                  top: MediaQuery.of(context).padding.top, // Account for status bar
-                ),
-                height: MediaQuery.of(context).padding.top + 48, // Even more reduced height
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: AppSpacing.pagePaddingHorizontal, 
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.center, // This should now center within the 48dp height
-                    children: [
-                      // Hamburger Menu Toggle
-                      _buildIconButton(
-                        icon: _isSidePanelVisible ? Icons.close : Icons.menu,
-                        tooltip: _isSidePanelVisible ? 'Close Panel' : 'Open Panel',
-                        onPressed: _toggleSidePanel,
-                        colorScheme: colorScheme,
-                        // Removed useAccentColor for hamburger
-                      ),
-                      const SizedBox(width: AppSpacing.inlineSpacing),
-                      // Model Selector Button
-                      ModelSelectorButton(
-                        selectedModel: chatProvider.selectedModel,
-                        availableModels: chatProvider.availableModels,
-                      ),
-                      const Spacer(), // Pushes token window toggle right
-                      // Token Window Toggle (Optional)
-                      if (chatProvider.totalTokens > 0)
-                        _buildIconButton(
-                          icon: _isTokenWindowVisible ? Icons.insights_rounded : Icons.insights_outlined,
-                          tooltip: _isTokenWindowVisible ? 'Hide Token Usage' : 'Show Token Usage',
-                          onPressed: _toggleTokenWindow,
-                          colorScheme: colorScheme,
-                          useAccentColor: true,
-                        ),
-                      const SizedBox(width: 6), // Reduced spacing
-                      // Settings Button
-                      _buildIconButton(
-                        icon: Icons.settings_outlined,
-                        tooltip: 'Settings',
-                        onPressed: _navigateToSettings,
-                        colorScheme: colorScheme,
-                        useAccentColor: true,
-                      ),
-                    ],
-                  ),
+        ),
+        
+        // --- Restore Message Input Area ---
+        ChatContainer(
+          child: Padding(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.of(context).padding.bottom + AppSpacing.inlineSpacing, // SafeArea bottom + padding
+              left: AppSpacing.inlineSpacing, // Add consistent padding
+              right: AppSpacing.inlineSpacing,
+            ),
+            child: _buildMessageInput(chatProvider, isAuthenticated),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // Helper method to build consistent icon buttons (used in AppBar actions)
+  Widget _buildIconButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onPressed,
+    required ColorScheme colorScheme,
+    bool useAccentColor = false,
+  }) {
+    // Removed the outer Center wrapper
+    return Container(
+      decoration: BoxDecoration(
+        // Always transparent background
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(8), // Smaller radius
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8), // Match container
+          onTap: onPressed,
+          child: Padding(
+            padding: const EdgeInsets.all(6.0), // Further reduced padding
+            child: Tooltip(
+              message: tooltip,
+              child: Center( // Explicitly center the icon
+                child: Icon(
+                  icon,
+                  size: 22, // Reduced icon size again
+                  // Icon color still uses accent when requested
+                  color: useAccentColor
+                      ? colorScheme.primary
+                      : colorScheme.onSurface.withOpacity(0.8),
                 ),
               ),
             ),
           ),
-        ],
+        ),
       ),
     );
   }
 
   Widget _buildMessagesList(ChatProvider chatProvider) {
+    // Removed isEmpty check - handled in _buildBody now
     final messages = chatProvider.messages;
-    final theme = Theme.of(context); // Get theme for empty state
+    final theme = Theme.of(context); 
 
-    if (messages.isEmpty) {
-      return _buildEmptyState(context);
-    }
-
+    // Directly return the GestureDetector containing the ListView
     return GestureDetector(
       onTap: () => FocusScope.of(context).unfocus(), // Dismiss keyboard on tap
       child: ScrollConfiguration(
@@ -705,12 +737,12 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     );
   }
 
-  Widget _buildEmptyState(BuildContext context) {
+  Widget _buildEmptyState(BuildContext context, ChatProvider chatProvider) {
     final themeProvider = Provider.of<ThemeProvider>(context);
-    final isLoading = _chatProvider.isLoading;
-    final errorMessage = _chatProvider.error;
-    final hasModels = _chatProvider.availableModels.isNotEmpty;
-    final selectedModel = _chatProvider.selectedModel;
+    final isLoading = chatProvider.isLoading;
+    final errorMessage = chatProvider.error;
+    final hasModels = chatProvider.availableModels.isNotEmpty;
+    final selectedModel = chatProvider.selectedModel;
     
     return Center(
       child: Padding(
@@ -756,15 +788,15 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   textAlign: TextAlign.center,
                 )
               else
-                Text( // Personalized welcome message using display name
-                  'Hola, ${_chatProvider.currentDisplayName ?? 'there'}!', // Use currentDisplayName
+                Text( // Use passed chatProvider parameter
+                  'Hola, ${chatProvider.currentDisplayName ?? 'there'}!',
                   style: Theme.of(context).textTheme.titleLarge?.copyWith(
                      fontWeight: FontWeight.w600, // Slightly bolder
                      color: Theme.of(context).colorScheme.primary, // Use primary color
                   ),
                   textAlign: TextAlign.center,
                 ),
-                
+              
               const SizedBox(height: 8),
               
               // Subtitle based on state
@@ -1094,47 +1126,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           ],
         );
       },
-    );
-  }
-
-  // Helper method to build consistent icon buttons
-  Widget _buildIconButton({
-    required IconData icon,
-    required String tooltip,
-    required VoidCallback onPressed,
-    required ColorScheme colorScheme,
-    bool useAccentColor = false,
-  }) {
-    // Removed the outer Center wrapper
-    return Container(
-      decoration: BoxDecoration(
-        // Always transparent background
-        color: Colors.transparent,
-        borderRadius: BorderRadius.circular(8), // Smaller radius
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(8), // Match container
-          onTap: onPressed,
-          child: Padding(
-            padding: const EdgeInsets.all(6.0), // Further reduced padding
-            child: Tooltip(
-              message: tooltip,
-              child: Center( // Explicitly center the icon
-                child: Icon(
-                  icon,
-                  size: 22, // Reduced icon size again
-                  // Icon color still uses accent when requested
-                  color: useAccentColor
-                      ? colorScheme.primary
-                      : colorScheme.onSurface.withOpacity(0.8),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
     );
   }
 }

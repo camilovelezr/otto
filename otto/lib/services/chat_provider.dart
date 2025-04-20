@@ -353,6 +353,19 @@ class ChatProvider with ChangeNotifier {
 
   // Load a specific conversation
   Future<void> loadConversation(String conversationId) async {
+    // Prevent loading if it's a temporary ID
+    if (_isTemporaryConversationId(conversationId)) {
+      debugPrint('Attempted to load messages for a temporary conversation ID ($conversationId). Aborting.');
+      // Optionally, just ensure the UI reflects the empty state for the temp ID
+      if (_currentConversationId != conversationId) {
+        _currentConversationId = conversationId;
+        _messages.clear();
+        resetTokenAndCostTracking();
+        notifyListeners();
+      }
+      return; // Do not proceed further
+    }
+
     _isLoading = true; // Loading messages state
     _error = null;
     _messages.clear(); // Clear messages immediately
@@ -1131,7 +1144,8 @@ class ChatProvider with ChangeNotifier {
   // --- End New Method ---
 
   // Helper method to check if a conversation ID is temporary
-  bool _isTemporaryConversationId(String? conversationId) {
+  // Made public for use in ChatScreen listener
+  bool isTemporaryConversationId(String? conversationId) {
     return conversationId != null && conversationId.startsWith("temp_");
   }
 }
