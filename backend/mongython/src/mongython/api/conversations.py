@@ -12,13 +12,19 @@ import openai
 from pydantic import BaseModel, UUID4
 
 from mongython.models.conversation import Conversation
-from mongython.models.message import Message # TokenWindowState removed as it's part of Conversation now
+from mongython.models.message import (
+    Message,
+)  # TokenWindowState removed as it's part of Conversation now
 from mongython.api.errors import ErrorResponse
 from mongython.api.users import get_current_user
 from mongython.models.user import User
-from mongython.utils.server_encryption import server_encryption # Import server encryption
-import openai # Import openai
-from mongython.models.llm_model import LLMModel # Import LLMModel for summary model lookup
+from mongython.utils.server_encryption import (
+    server_encryption,
+)  # Import server encryption
+import openai  # Import openai
+from mongython.models.llm_model import (
+    LLMModel,
+)  # Import LLMModel for summary model lookup
 from dotenv import load_dotenv, find_dotenv
 import os
 
@@ -64,7 +70,9 @@ class MessageResponse(BaseModel):
     id: str
     role: str
     # content: Optional[str] = None # Removed plain content field
-    content: Optional[str] = None # Renamed from encrypted_content, holds encrypted data
+    content: Optional[str] = (
+        None  # Renamed from encrypted_content, holds encrypted data
+    )
     # is_encrypted: bool # Removed
     # E2EE fields now returned by Message.to_dict()
     encrypted_key: Optional[str] = None
@@ -84,7 +92,7 @@ class MessageListResponse(BaseModel):
 class MessageRequest(BaseModel):
     role: str
     # Content is now always the base64 encrypted string (IV + Ciphertext + Tag)
-    content: str # Renamed from encrypted_content conceptually
+    content: str  # Renamed from encrypted_content conceptually
     # is_encrypted: bool = False # Removed, always true
     # E2EE fields required from client
     encrypted_key: Optional[str] = None
@@ -98,10 +106,11 @@ class MessageRequest(BaseModel):
 class TitleUpdateRequest(BaseModel):
     title: str
 
+
 # --- New Models for Summarization ---
 class SummarizeRequestMessage(BaseModel):
     role: str
-    content: Optional[str] = None # Renamed from encrypted_content
+    content: Optional[str] = None  # Renamed from encrypted_content
     # encrypted_content: Optional[str] = None # Removed
     # Add the missing optional fields expected for decryption
     encrypted_key: Optional[str] = None
@@ -109,11 +118,15 @@ class SummarizeRequestMessage(BaseModel):
     tag: Optional[str] = None
     # is_encrypted: bool # Removed
 
+
 class SummarizeRequest(BaseModel):
     messages: List[SummarizeRequestMessage]
 
+
 class SummarizeResponse(BaseModel):
     title: str
+
+
 # --- End New Models ---
 
 
@@ -168,18 +181,37 @@ async def create_conversation(
         # Create conversation with user's public key for encryption
         conversation = await Conversation.create_initial(
             current_user,
-            user_public_key=current_user.public_key if current_user.public_key else None
+            user_public_key=(
+                current_user.ed25519_public_key
+                if current_user.ed25519_public_key
+                else None
+            ),
         )
-        
-        logger.info(f"Created conversation {conversation.id} for user {current_user.id}")
-        logger.debug(f"Encryption setup: has_public_key={bool(current_user.public_key)}, has_conv_key={bool(conversation.encrypted_conversation_key)}")
-        
-        return conversation.to_dict()
+
+        logger.info(
+            f"Created conversation {conversation.id} for user {current_user.id}"
+        )
+        logger.debug(
+            f"Encryption setup: has_public_key={bool(current_user.ed25519_public_key)}, has_conv_key={bool(conversation.encrypted_conversation_key)}"
+        )
+
+        # Prepare the response
+        response_data = conversation.dict()  # Convert Beanie doc to dict
+        response_data["id"] = str(conversation.id)  # Ensure ID is a string
+        response_data["user_id"] = str(current_user.id)  # Add user ID as string
+
+        # Return necessary keys for E2EE setup
+        response_data["server_public_key"] = server_encryption.get_public_key_pem()
+        response_data["user_public_key"] = (
+            current_user.ed25519_public_key if current_user.ed25519_public_key else None
+        )
+
+        return JSONResponse(content=response_data, status_code=status.HTTP_201_CREATED)
     except Exception as e:
         logger.error(f"Failed to create conversation: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create conversation: {str(e)}"
+            detail=f"Failed to create conversation: {str(e)}",
         )
 
 
@@ -208,7 +240,8 @@ async def get_conversation(
         # tags=conversation.tags, # Removed
         # detected_topics=conversation.detected_topics, # Removed
         # summary=conversation.summary, # Removed
-        )
+    )
+
 
 # --- New Summarization Endpoint ---
 @router.put("/{conversation_id}/summarize", response_model=SummarizeResponse)
@@ -231,7 +264,7 @@ async def summarize_conversation(
             )
 
         if not request.messages:
-             raise HTTPException(
+            raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="No messages provided for summarization",
             )
@@ -241,35 +274,53 @@ async def summarize_conversation(
         for msg_data in request.messages:
             # is_encrypted removed, assume always encrypted. Check for content instead.
             if not msg_data.content:
-                 logger.warning(f"Received message with no content for summarization in conv {conversation_id}, skipping.")
-                 continue # Or raise error? Skipping for now.
+                logger.warning(
+                    f"Received message with no content for summarization in conv {conversation_id}, skipping."
+                )
+                continue  # Or raise error? Skipping for now.
             try:
                 # Use the renamed 'content' field
                 encrypted_components = {
-                    'encrypted_content': msg_data.content, # Use renamed field, map to expected key
-                    'encrypted_key': getattr(msg_data, 'encrypted_key', None), # Handle potential missing optional fields
-                    'iv': getattr(msg_data, 'iv', None),
-                    'tag': getattr(msg_data, 'tag', None)
+                    "encrypted_content": msg_data.content,  # Use renamed field, map to expected key
+                    "encrypted_key": getattr(
+                        msg_data, "encrypted_key", None
+                    ),  # Handle potential missing optional fields
+                    "iv": getattr(msg_data, "iv", None),
+                    "tag": getattr(msg_data, "tag", None),
                 }
                 # Ensure all components needed for decryption are present
                 # Check encrypted_content specifically, others might be optional depending on exact decryption needs
-                if not encrypted_components['encrypted_content'] or not encrypted_components['encrypted_key'] or not encrypted_components['iv'] or not encrypted_components['tag']:
-                     logger.warning(f"Skipping message due to missing encryption components for summarization: {encrypted_components}")
-                     continue
+                if (
+                    not encrypted_components["encrypted_content"]
+                    or not encrypted_components["encrypted_key"]
+                    or not encrypted_components["iv"]
+                    or not encrypted_components["tag"]
+                ):
+                    logger.warning(
+                        f"Skipping message due to missing encryption components for summarization: {encrypted_components}"
+                    )
+                    continue
 
-                decrypted_content = server_encryption.decrypt_from_client(encrypted_components)
-                decrypted_messages.append({"role": msg_data.role, "content": decrypted_content})
+                decrypted_content = server_encryption.decrypt_from_client(
+                    encrypted_components
+                )
+                decrypted_messages.append(
+                    {"role": msg_data.role, "content": decrypted_content}
+                )
             except Exception as e:
-                logger.error(f"Failed to decrypt message for summarization in conv {conversation_id}: {e}", exc_info=True)
+                logger.error(
+                    f"Failed to decrypt message for summarization in conv {conversation_id}: {e}",
+                    exc_info=True,
+                )
                 # Decide whether to proceed with partial context or fail
                 # For now, let's fail if any decryption error occurs to ensure title quality
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Failed to decrypt message content for summarization: {e}"
+                    detail=f"Failed to decrypt message content for summarization: {e}",
                 )
 
         if not decrypted_messages:
-             raise HTTPException(
+            raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Could not decrypt any messages for summarization",
             )
@@ -287,13 +338,15 @@ async def summarize_conversation(
                 "Do not include any other text in your response, just the title."
                 "Do not format it, just return the text as a string with no markdown formatting."
                 "I REPEAT, it MUST BE SHORT, like 3-5 words, no more than 10 characters!!."
-            )
+            ),
         }
         # Format the conversation history as a single string for the user message
-        conversation_text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in decrypted_messages])
+        conversation_text = "\n".join(
+            [f"{msg['role']}: {msg['content']}" for msg in decrypted_messages]
+        )
         llm_input_messages = [
             summary_prompt,
-            {"role": "user", "content": f"Conversation history: {conversation_text}"}
+            {"role": "user", "content": f"Conversation history: {conversation_text}"},
         ]
 
         # Log the exact input being sent to the LLM
@@ -301,36 +354,55 @@ async def summarize_conversation(
 
         # Call the summarization LLM
         try:
-            logger.info(f"Calling summarization model ({SUMMARY_MODEL}) for conv {conversation_id}")
+            logger.info(
+                f"Calling summarization model ({SUMMARY_MODEL}) for conv {conversation_id}"
+            )
             # Use the user's auth token, consistent with the /generate endpoint
             if not current_user.auth_token:
-                 logger.error(f"User {current_user.id} missing auth token for summarization call.")
-                 raise HTTPException(status_code=500, detail="User auth token missing for summarization.")
+                logger.error(
+                    f"User {current_user.id} missing auth token for summarization call."
+                )
+                raise HTTPException(
+                    status_code=500, detail="User auth token missing for summarization."
+                )
 
-            client_ = openai.AsyncOpenAI(api_key=current_user.auth_token, base_url=LITELLM_URL)
+            client_ = openai.AsyncOpenAI(
+                api_key=current_user.auth_token, base_url=LITELLM_URL
+            )
             logger.debug(f"Summarization input messages: {llm_input_messages}")
             response = await client_.chat.completions.create(
                 model=SUMMARY_MODEL,
                 messages=llm_input_messages,
-                max_tokens=10, # Keep title short
-                temperature=0.77, # Be somewhat creative but not too random
+                max_tokens=10,  # Keep title short
+                temperature=0.77,  # Be somewhat creative but not too random
             )
             logger.debug(f"Summarization response: {response}")
-            generated_title = response.choices[0].message.content.strip().replace("'", "").replace('"', '').replace("*", "")
-            logger.info(f"Generated title for conv {conversation_id}: '{generated_title}'")
+            generated_title = (
+                response.choices[0]
+                .message.content.strip()
+                .replace("'", "")
+                .replace('"', "")
+                .replace("*", "")
+            )
+            logger.info(
+                f"Generated title for conv {conversation_id}: '{generated_title}'"
+            )
 
             # Basic cleanup/validation
             if not generated_title:
-                 generated_title = conversation_text # Fallback title
+                generated_title = conversation_text  # Fallback title
 
             # Limit length if needed (optional)
-            generated_title = generated_title[:50] # Max 50 chars
+            generated_title = generated_title[:50]  # Max 50 chars
 
         except Exception as llm_e:
-            logger.error(f"Error calling summarization model for conv {conversation_id}: {llm_e}", exc_info=True)
+            logger.error(
+                f"Error calling summarization model for conv {conversation_id}: {llm_e}",
+                exc_info=True,
+            )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to generate conversation title: {llm_e}"
+                detail=f"Failed to generate conversation title: {llm_e}",
             )
 
         # Update conversation title in DB
@@ -342,13 +414,18 @@ async def summarize_conversation(
         return SummarizeResponse(title=generated_title)
 
     except HTTPException:
-        raise # Re-raise validation/auth errors
+        raise  # Re-raise validation/auth errors
     except Exception as e:
-        logger.error(f"Unexpected error during conversation summarization for {conversation_id}: {e}", exc_info=True)
+        logger.error(
+            f"Unexpected error during conversation summarization for {conversation_id}: {e}",
+            exc_info=True,
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to summarize conversation: {e}"
+            detail=f"Failed to summarize conversation: {e}",
         )
+
+
 # --- End New Summarization Endpoint ---
 
 
@@ -398,28 +475,37 @@ async def get_conversation_messages(
             detail="Conversation not found",
         )
 
-    logger.debug(f"Fetching messages for conversation {conversation_id} (User: {current_user.id})")
+    logger.debug(
+        f"Fetching messages for conversation {conversation_id} (User: {current_user.id})"
+    )
     messages = (
         await Message.find(Message.conversation_id == conversation.id)
         .sort("+created_at")
         .to_list()
     )
-    logger.info(f"Found {len(messages)} messages in DB for conversation {conversation_id}")
+    logger.info(
+        f"Found {len(messages)} messages in DB for conversation {conversation_id}"
+    )
 
     response_messages = []
     for msg in messages:
         try:
             msg_dict = msg.to_dict()
-            logger.debug(f"Processing message {msg.id} for response. Role: {msg_dict.get('role')}, HasContent: {msg_dict.get('content') is not None}, HasKey: {msg_dict.get('encrypted_key') is not None}")
+            logger.debug(
+                f"Processing message {msg.id} for response. Role: {msg_dict.get('role')}, HasContent: {msg_dict.get('content') is not None}, HasKey: {msg_dict.get('encrypted_key') is not None}"
+            )
             response_messages.append(MessageResponse(**msg_dict))
         except Exception as e:
-            logger.error(f"Error converting message {msg.id} to dict for response: {e}", exc_info=True)
+            logger.error(
+                f"Error converting message {msg.id} to dict for response: {e}",
+                exc_info=True,
+            )
             # Optionally skip the message or add a placeholder
 
-    logger.debug(f"Returning {len(response_messages)} messages for conversation {conversation_id}")
-    return MessageListResponse(
-        messages=response_messages
+    logger.debug(
+        f"Returning {len(response_messages)} messages for conversation {conversation_id}"
     )
+    return MessageListResponse(messages=response_messages)
 
 
 @router.post("/{conversation_id}/add_message", response_model=MessageResponse)
@@ -499,11 +585,11 @@ async def add_message(
                 conversation_id=conv_uuid,
                 parent_message_id=parent_message_id,
                 # is_encrypted=is_encrypted, # Removed
-                content=message_data.content, # Assign encrypted content directly
+                content=message_data.content,  # Assign encrypted content directly
                 encrypted_key=message_data.encrypted_key,
                 iv=message_data.iv,
                 tag=message_data.tag,
-                token_count=0 # Cannot estimate tokens for encrypted
+                token_count=0,  # Cannot estimate tokens for encrypted
                 # encryption_metadata=message_data.encryption_metadata # Optional
             )
             # Removed if/else based on is_encrypted
@@ -520,7 +606,7 @@ async def add_message(
 
             # Parent message ID logic remains the same (find most recent user message if needed)
             if not parent_message_id:
-                 # Find the most recent user message to use as parent
+                # Find the most recent user message to use as parent
                 try:
                     user_messages = (
                         await Message.find(
@@ -532,11 +618,13 @@ async def add_message(
                     )
                     if user_messages:
                         parent_message_id = user_messages[0].id
-                    else: # Handle case where no user message exists yet
-                         parent_message_id = None # Or handle as error if required
+                    else:  # Handle case where no user message exists yet
+                        parent_message_id = None  # Or handle as error if required
                 except Exception as e:
-                    logger.error(f"Error finding parent user message: {e}", exc_info=True)
-                    parent_message_id = None # Fallback or raise error
+                    logger.error(
+                        f"Error finding parent user message: {e}", exc_info=True
+                    )
+                    parent_message_id = None  # Fallback or raise error
 
             # Create the message document directly, setting new E2EE fields
             message = Message(
@@ -544,14 +632,14 @@ async def add_message(
                 conversation_id=conv_uuid,
                 parent_message_id=parent_message_id,
                 model_id=message_data.model_id,
-                content=message_data.content, # Assign encrypted content directly
+                content=message_data.content,  # Assign encrypted content directly
                 encrypted_key=message_data.encrypted_key,
                 iv=message_data.iv,
                 tag=message_data.tag,
-                token_count=0 # Cannot estimate tokens for encrypted
+                token_count=0,  # Cannot estimate tokens for encrypted
             )
             await message.save()
-             # Update conversation token window
+            # Update conversation token window
             conversation.token_window.update_from_message(message, is_input=False)
 
         else:
@@ -562,7 +650,7 @@ async def add_message(
 
         # Update conversation timestamp
         conversation.updated_at = datetime.now()
-        await conversation.save() # Save token window and updated_at changes
+        await conversation.save()  # Save token window and updated_at changes
 
         # Return the created message using its to_dict method
         return MessageResponse(**message.to_dict())
@@ -612,7 +700,9 @@ async def delete_my_conversations(
 ):
     """Delete all conversations and associated messages for the authenticated user."""
     try:
-        logger.info(f"Initiating deletion of all conversations for user {current_user.id} ({current_user.username})")
+        logger.info(
+            f"Initiating deletion of all conversations for user {current_user.id} ({current_user.username})"
+        )
         # Find all conversations for the current user
         conversations = await Conversation.find(
             Conversation.user.id == current_user.id
@@ -623,21 +713,36 @@ async def delete_my_conversations(
 
         if not conversations:
             logger.info(f"No conversations found for user {current_user.id} to delete.")
-            return {"message": "No conversations found to delete.", "deleted_conversations_count": 0, "deleted_messages_count": 0}
+            return {
+                "message": "No conversations found to delete.",
+                "deleted_conversations_count": 0,
+                "deleted_messages_count": 0,
+            }
 
         # Delete all messages for each conversation, then the conversation itself
         for conversation in conversations:
             try:
-                messages_deleted = await Message.find(Message.conversation_id == conversation.id).delete()
-                deleted_messages_count += messages_deleted.deleted_count if messages_deleted else 0
+                messages_deleted = await Message.find(
+                    Message.conversation_id == conversation.id
+                ).delete()
+                deleted_messages_count += (
+                    messages_deleted.deleted_count if messages_deleted else 0
+                )
                 await conversation.delete()
                 deleted_conversations_count += 1
-                logger.debug(f"Deleted conversation {conversation.id} and {messages_deleted.deleted_count if messages_deleted else 0} messages for user {current_user.id}")
+                logger.debug(
+                    f"Deleted conversation {conversation.id} and {messages_deleted.deleted_count if messages_deleted else 0} messages for user {current_user.id}"
+                )
             except Exception as inner_e:
-                logger.error(f"Error deleting conversation {conversation.id} or its messages for user {current_user.id}: {inner_e}", exc_info=True)
+                logger.error(
+                    f"Error deleting conversation {conversation.id} or its messages for user {current_user.id}: {inner_e}",
+                    exc_info=True,
+                )
                 # Decide whether to continue or stop on error. Continuing for now.
 
-        logger.info(f"Successfully deleted {deleted_conversations_count} conversations and {deleted_messages_count} messages for user {current_user.id}")
+        logger.info(
+            f"Successfully deleted {deleted_conversations_count} conversations and {deleted_messages_count} messages for user {current_user.id}"
+        )
         return {
             "message": "All conversations deleted successfully",
             "deleted_conversations_count": deleted_conversations_count,
@@ -645,7 +750,10 @@ async def delete_my_conversations(
         }
 
     except Exception as e:
-        logger.error(f"Error deleting all conversations for user {current_user.id}: {e}", exc_info=True)
+        logger.error(
+            f"Error deleting all conversations for user {current_user.id}: {e}",
+            exc_info=True,
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An unexpected error occurred while deleting conversations: {str(e)}",
@@ -689,8 +797,6 @@ async def get_message_thread(
     )
 
 
-
-
 @router.delete("/all", response_model=dict)
 async def delete_all_conversations(
     current_user: User = Depends(get_current_user),
@@ -727,6 +833,7 @@ async def delete_all_conversations(
 
 # --- Admin Endpoints ---
 
+
 @router.delete("/admin/all", response_model=dict)
 async def admin_delete_all_conversations():
     """Admin endpoint to delete all conversations from all users. No auth required - meant for local admin use."""
@@ -737,7 +844,9 @@ async def admin_delete_all_conversations():
         # Delete all messages for each conversation
         total_messages = 0
         for conversation in conversations:
-            messages = await Message.find(Message.conversation_id == conversation.id).to_list()
+            messages = await Message.find(
+                Message.conversation_id == conversation.id
+            ).to_list()
             total_messages += len(messages)
             for message in messages:
                 await message.delete()
@@ -746,14 +855,15 @@ async def admin_delete_all_conversations():
         return {
             "status": "success",
             "conversations_deleted": len(conversations),
-            "messages_deleted": total_messages
+            "messages_deleted": total_messages,
         }
     except Exception as e:
         logger.error(f"Admin error deleting all conversations: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error deleting all conversations: {str(e)}"
+            detail=f"Error deleting all conversations: {str(e)}",
         )
+
 
 @router.delete("/admin/user/{username}", response_model=dict)
 async def admin_delete_user_conversations(username: str):
@@ -764,16 +874,20 @@ async def admin_delete_user_conversations(username: str):
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"User {username} not found"
+                detail=f"User {username} not found",
             )
 
         # Find all conversations for this user
-        conversations = await Conversation.find(Conversation.user.id == user.id).to_list()
+        conversations = await Conversation.find(
+            Conversation.user.id == user.id
+        ).to_list()
 
         # Delete all messages and conversations
         total_messages = 0
         for conversation in conversations:
-            messages = await Message.find(Message.conversation_id == conversation.id).to_list()
+            messages = await Message.find(
+                Message.conversation_id == conversation.id
+            ).to_list()
             total_messages += len(messages)
             for message in messages:
                 await message.delete()
@@ -783,13 +897,16 @@ async def admin_delete_user_conversations(username: str):
             "status": "success",
             "username": username,
             "conversations_deleted": len(conversations),
-            "messages_deleted": total_messages
+            "messages_deleted": total_messages,
         }
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Admin error deleting conversations for user {username}: {e}", exc_info=True)
+        logger.error(
+            f"Admin error deleting conversations for user {username}: {e}",
+            exc_info=True,
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error deleting conversations for user {username}: {str(e)}"
+            detail=f"Error deleting conversations for user {username}: {str(e)}",
         )

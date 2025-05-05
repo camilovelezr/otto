@@ -48,13 +48,21 @@ class AuthService {
     if (_token == null) {
       await _loadSession(); // This method loads the token too
     }
-    if (_token == null) {
-      throw Exception('Not authenticated: Token not available.');
+    // Also ensure user is loaded
+    if (_currentUser == null) {
+      await _loadSession();
     }
+
+    if (_currentUser?.username == null) {
+      throw Exception('Not authenticated: User or username not available.');
+    }
+
+    // Use X-Username, consistent with the authHeaders getter and backend expectation
     return {
-      'Authorization': 'Bearer $_token',
-      'Content-Type': 'application/json', // Often needed
-      'Accept': 'application/json', // Good practice
+      // 'Authorization': 'Bearer $_token', // <-- Remove this
+      'X-Username': _currentUser!.username, // <-- Add this
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
     };
   }
 

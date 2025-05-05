@@ -247,7 +247,6 @@ async def create_user(user: UserCreate):
     },
 )
 async def upload_ed25519_public_key(
-    # Use the new request model
     key_data: Ed25519PublicKeyUploadRequest,
     current_user: User = Depends(get_current_user),
 ):
@@ -255,25 +254,18 @@ async def upload_ed25519_public_key(
     Allows the authenticated user to upload their Ed25519 public key.
     """
     try:
-        # Validate the base64 key and length
-        try:
-            key_bytes = base64.b64decode(key_data.ed25519_public_key)
-            if len(key_bytes) != 32:
-                raise ValueError("Decoded public key must be 32 bytes long.")
-            logger.info(
-                f"Ed25519 public key format validated for user {current_user.username}"
-            )
-        except (base64.binascii.Error, ValueError) as e:
-            logger.warning(
-                f"Invalid Ed25519 public key uploaded by user {current_user.username}: {e}"
-            )
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid Ed25519 public key format or length: {e}",
-            )
+        # Decode the key from base64
+        key_bytes = base64.b64decode(key_data.public_key_base64)
+
+        # Validate key length (Ed25519 public key is 32 bytes)
+        if len(key_bytes) != 32:
+            raise ValueError("Decoded public key must be 32 bytes long.")
+        logger.info(
+            f"Ed25519 public key format validated for user {current_user.username}"
+        )
 
         # Update the user document with the base64 encoded key
-        current_user.ed25519_public_key = key_data.ed25519_public_key
+        current_user.ed25519_public_key = key_data.public_key_base64
         # Optionally update key_version if needed, or handle in client/seed logic
         # current_user.key_version = current_user.key_version + 1
         await current_user.save()
