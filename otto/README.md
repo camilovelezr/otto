@@ -1,4 +1,4 @@
-# aithena_chat
+# Otto
 
 A new Flutter project.
 

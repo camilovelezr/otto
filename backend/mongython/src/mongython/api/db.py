@@ -53,9 +53,9 @@ def create_mongo_client(uri, attempts=MAX_CONNECTION_ATTEMPTS):
                 f"Attempting to create MongoDB client (attempt {attempt}/{attempts})"
             )
             client = AsyncIOMotorClient(
-                uri, 
+                uri,
                 serverSelectionTimeoutMS=5000,
-                uuidRepresentation='standard'  # Use standard UUID representation
+                uuidRepresentation="standard",  # Use standard UUID representation
             )
             return client
         except Exception as e:
@@ -77,12 +77,14 @@ client = create_mongo_client(MONGO_URI)
 # Flag to track if Beanie has been initialized
 _beanie_initialized = False
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize database connection on startup and close on shutdown."""
     logger.info("Initializing database connection")
+    logger.info(f"MongoDB URI: {MONGO_URI}")
     global _beanie_initialized
-    
+
     for attempt in range(1, MAX_CONNECTION_ATTEMPTS + 1):
         try:
             # Verify database connectivity before initializing Beanie
@@ -95,26 +97,22 @@ async def lifespan(app: FastAPI):
             # Configure the database with proper UUID handling
             db = client[db_name]
             db = db.with_options(
-                codec_options=CodecOptions(uuid_representation=UuidRepresentation.STANDARD)
+                codec_options=CodecOptions(
+                    uuid_representation=UuidRepresentation.STANDARD
+                )
             )
-            
+
             # Initialize Beanie only if it hasn't been initialized yet
             if not _beanie_initialized:
                 logger.info("Initializing Beanie ODM")
                 await init_beanie(
-                    database=db,
-                    document_models=[
-                        User,
-                        LLMModel,
-                        Conversation,
-                        Message
-                    ]
+                    database=db, document_models=[User, LLMModel, Conversation, Message]
                 )
                 _beanie_initialized = True
-                
+
             logger.info("Database connection established")
             break  # Exit the retry loop once connection is successful
-            
+
         except (ServerSelectionTimeoutError, ConnectionFailure) as e:
             if attempt == MAX_CONNECTION_ATTEMPTS:
                 error_message = generate_db_error_message()

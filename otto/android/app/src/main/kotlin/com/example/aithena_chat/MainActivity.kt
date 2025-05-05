@@ -1,4 +1,4 @@
-package com.example.aithena_chat
+package com.example.otto
 
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -7,7 +7,7 @@ import android.os.Bundle
 import io.flutter.plugins.GeneratedPluginRegistrant
 
 class MainActivity: FlutterActivity() {
-    private val CHANNEL = "com.example.aithena_chat/config"
+    private val CHANNEL = "com.example.otto/config"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)

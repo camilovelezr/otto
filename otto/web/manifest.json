@@ -1,6 +1,6 @@
 {
-    "name": "aithena_chat",
-    "short_name": "aithena_chat",
+    "name": "Otto",
+    "short_name": "Otto",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

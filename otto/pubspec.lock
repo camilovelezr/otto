@@ -33,6 +33,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.12.0"
+  bip39:
+    dependency: "direct main"
+    description:
+      name: bip39
+      sha256: de1ee27ebe7d96b84bb3a04a4132a0a3007dcdd5ad27dd14aa87a29d97c45edc
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.0.6"
   boolean_selector:
     dependency: transitive
     description:
@@ -97,6 +105,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.0.6"
+  cryptography:
+    dependency: "direct main"
+    description:
+      name: cryptography
+      sha256: d146b76d33d94548cf035233fbc2f4338c1242fa119013bead807d033fc4ae05
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.7.0"
   cupertino_icons:
     dependency: "direct main"
     description:
@@ -185,7 +201,7 @@ packages:
   flutter_highlight:
     dependency: "direct main"
     description:
-      path: "../highlight.dart/flutter_highlight"
+      path: "../../highlight.dart/flutter_highlight"
       relative: true
     source: path
     version: "0.7.0"
@@ -306,10 +322,18 @@ packages:
   gpt_markdown:
     dependency: "direct main"
     description:
-      path: "../gpt_markdown"
+      path: "../../gpt_markdown"
       relative: true
     source: path
-    version: "1.0.16"
+    version: "1.0.17"
+  hex:
+    dependency: transitive
+    description:
+      name: hex
+      sha256: "4e7cd54e4b59ba026432a6be2dd9d96e4c5205725194997193bf871703b82c4a"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.2.0"
   highlight:
     dependency: transitive
     description:
@@ -426,10 +450,10 @@ packages:
     dependency: "direct main"
     description:
       name: mobile_scanner
-      sha256: d234581c090526676fd8fab4ada92f35c6746e3fb4f05a399665d75a399fb760
+      sha256: f536c5b8cadcf73d764bdce09c94744f06aa832264730f8971b21a60c5666826
       url: "https://pub.dev"
     source: hosted
-    version: "5.2.3"
+    version: "6.0.10"
   nested:
     dependency: transitive
     description:
@@ -558,14 +582,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.0.2"
-  qr_code_scanner:
-    dependency: "direct main"
-    description:
-      name: qr_code_scanner
-      sha256: f23b68d893505a424f0bd2e324ebea71ed88465d572d26bb8d2e78a4749591fd
-      url: "https://pub.dev"
-    source: hosted
-    version: "1.0.1"
   qr_flutter:
     dependency: "direct main"
     description:
@@ -843,6 +859,22 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.1.1"
+  web_socket:
+    dependency: transitive
+    description:
+      name: web_socket
+      sha256: bfe6f435f6ec49cb6c01da1e275ae4228719e59a6b067048c51e72d9d63bcc4b
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.0.0"
+  web_socket_channel:
+    dependency: "direct main"
+    description:
+      name: web_socket_channel
+      sha256: d645757fb0f4773d602444000a8131ff5d48c9e47adfe9772652dd1a4f2d45c8
+      url: "https://pub.dev"
+    source: hosted
+    version: "3.0.3"
   win32:
     dependency: transitive
     description:

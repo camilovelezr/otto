@@ -5,6 +5,7 @@ import asyncio
 import os
 from typing import Optional, Dict, Any
 import httpx
+import base64
 
 from fastapi import (
     APIRouter,
@@ -13,20 +14,33 @@ from fastapi import (
     status,
     Response,
     Request,
-    Depends, # Added Depends
+    Depends,  # Added Depends
     Header,
 )
-from pydantic import BaseModel, Field # Added BaseModel and Field
+from pydantic import BaseModel, Field  # Added BaseModel and Field
+from fastapi.responses import JSONResponse
+from beanie import PydanticObjectId
 
-from mongython.models.user import User, UserCreate
+from mongython.models.user import (
+    User,
+    UserCreate,
+    UserLogin,
+    Ed25519PublicKeyUploadRequest,
+    UserPublicKeyResponse,
+    EncryptedSeedRequest,
+    EncryptedSeedResponse,
+)
 from mongython.api.errors import ErrorResponse
+
 # Import encryption utils to validate the key format (optional but good practice)
 from mongython.utils.encryption import load_public_key_from_pem
-from datetime import datetime # Keep datetime
+from datetime import datetime  # Keep datetime
 from mongython.models.conversation import Conversation
 from mongython.models.message import Message
 from mongython.utils.encryption import server_encryption
-from mongython.utils.server_encryption import server_encryption as server_encryption_utils
+from mongython.utils.server_encryption import (
+    server_encryption as server_encryption_utils,
+)
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -84,8 +98,10 @@ async def get_current_user(request: Request) -> User:
 
 # --- User CRUD Operations ---
 
+
 class UserResponse(BaseModel):
     """Response model for user data, excluding sensitive fields."""
+
     id: str
     username: str
     name: str
@@ -94,6 +110,7 @@ class UserResponse(BaseModel):
     has_public_key: bool
     key_version: int
     auth_token: Optional[str] = None
+
 
 async def generate_litellm_key(username: str) -> str:
     """Generate a virtual key for the user using LiteLLM's key generation endpoint."""
@@ -105,20 +122,15 @@ async def generate_litellm_key(username: str) -> str:
                     "Authorization": f"Bearer {LITELLM_MASTER_KEY}",
                     "Content-Type": "application/json",
                 },
-                json={
-                    "user_id": username,
-                    "metadata": {
-                        "user": username
-                    }
-                },
-                timeout=10.0
+                json={"user_id": username, "metadata": {"user": username}},
+                timeout=10.0,
             )
 
             if response.status_code != 200:
                 logger.error(f"Failed to generate LiteLLM key: {response.text}")
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Failed to generate LiteLLM key"
+                    detail="Failed to generate LiteLLM key",
                 )
 
             data = response.json()
@@ -127,8 +139,9 @@ async def generate_litellm_key(username: str) -> str:
         logger.error(f"Error generating LiteLLM key: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error generating LiteLLM key: {str(e)}"
+            detail=f"Error generating LiteLLM key: {str(e)}",
         )
+
 
 @router.post(
     "/create",
@@ -153,9 +166,7 @@ async def create_user(user: UserCreate):
         # Create user with unpacked arguments
         logger.info(f"Creating user with username: {user.username}")
         new_user_doc = await User.create_user(
-            username=user.username,
-            password=user.password,
-            name=user.name
+            username=user.username, password=user.password, name=user.name
         )
 
         # Generate and set the LiteLLM virtual key
@@ -170,19 +181,25 @@ async def create_user(user: UserCreate):
             name=new_user_doc.name,
             created_at=new_user_doc.created_at,
             updated_at=new_user_doc.updated_at,
-            has_public_key=new_user_doc.public_key is not None,
+            has_public_key=new_user_doc.ed25519_public_key is not None,
             key_version=new_user_doc.key_version,
-            auth_token=new_user_doc.auth_token
+            auth_token=new_user_doc.auth_token,
         )
 
     except HTTPException:
         raise
     except Exception as e:
         # Handle specific database-related errors
-        if "All connection attempts failed" in str(e) or "ServerSelectionTimeoutError" in str(type(e)):
+        if "All connection attempts failed" in str(
+            e
+        ) or "ServerSelectionTimeoutError" in str(type(e)):
             error_message = "Unable to connect to database. Please check if MongoDB service is running."
-            logger.error(f"Database connection error creating user {user.username}: {str(e)}")
-            logger.error("Suggestion: Make sure MongoDB is running on the configured host and port")
+            logger.error(
+                f"Database connection error creating user {user.username}: {str(e)}"
+            )
+            logger.error(
+                "Suggestion: Make sure MongoDB is running on the configured host and port"
+            )
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=error_message,
@@ -190,128 +207,228 @@ async def create_user(user: UserCreate):
         elif "Could not connect to LiteLLM service" in str(e):
             litellm_url = os.getenv("LITELLM_URL", "http://localhost:4000")
             error_message = f"Unable to connect to LiteLLM service at {litellm_url}. Please check if the service is running."
-            logger.error(f"LiteLLM connection error creating user {user.username}: {str(e)}")
-            logger.error(f"Suggestion: Make sure the LiteLLM service is running and accessible at {litellm_url}")
+            logger.error(
+                f"LiteLLM connection error creating user {user.username}: {str(e)}"
+            )
+            logger.error(
+                f"Suggestion: Make sure the LiteLLM service is running and accessible at {litellm_url}"
+            )
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=error_message,
             )
         else:
-            logger.error(f"Error creating user {user.username}: {str(e)}", exc_info=True)
+            logger.error(
+                f"Error creating user {user.username}: {str(e)}", exc_info=True
+            )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Internal server error while creating user. Please try again later.",
             )
 
 
-# --- Public Key Upload Endpoint (Kept for client to register its public key) ---
+# --- Public Key Upload Endpoint (Modified for Ed25519) ---
 
-class PublicKeyUploadRequest(BaseModel):
-    public_key_pem: str
+# Remove old request model definition if it exists elsewhere
+# class PublicKeyUploadRequest(BaseModel):
+#    public_key_pem: str
+
 
 @router.post(
     "/me/public-key",
     status_code=status.HTTP_200_OK,
-    summary="Upload user's public key",
-    description="Uploads the PEM-encoded public RSA key for the authenticated user. This key is generated client-side.",
+    # Use standard response model? Or custom success message?
+    response_model=Dict[str, str],
+    summary="Upload user's Ed25519 public key",
+    description="Uploads the base64 encoded Ed25519 public key for the authenticated user.",
     responses={
-        400: {"model": ErrorResponse, "description": "Invalid key format"},
+        400: {"model": ErrorResponse, "description": "Invalid key format or data"},
         401: {"model": ErrorResponse, "description": "Authentication required"},
     },
 )
-async def upload_public_key(
-    key_data: PublicKeyUploadRequest,
+async def upload_ed25519_public_key(
+    # Use the new request model
+    key_data: Ed25519PublicKeyUploadRequest,
     current_user: User = Depends(get_current_user),
 ):
     """
-    Allows the authenticated user to upload their public encryption key,
-    which was generated on their device.
+    Allows the authenticated user to upload their Ed25519 public key.
     """
     try:
-        # Optional: Validate the PEM key format before saving
+        # Validate the base64 key and length
         try:
-            load_public_key_from_pem(key_data.public_key_pem)
-            logger.info(f"Public key format validated for user {current_user.username}")
-        except ValueError as e:
-            logger.warning(f"Invalid public key format uploaded by user {current_user.username}: {e}")
+            key_bytes = base64.b64decode(key_data.ed25519_public_key)
+            if len(key_bytes) != 32:
+                raise ValueError("Decoded public key must be 32 bytes long.")
+            logger.info(
+                f"Ed25519 public key format validated for user {current_user.username}"
+            )
+        except (base64.binascii.Error, ValueError) as e:
+            logger.warning(
+                f"Invalid Ed25519 public key uploaded by user {current_user.username}: {e}"
+            )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid public key PEM format: {e}",
+                detail=f"Invalid Ed25519 public key format or length: {e}",
             )
 
-        # Update the user document
-        current_user.public_key = key_data.public_key_pem
+        # Update the user document with the base64 encoded key
+        current_user.ed25519_public_key = key_data.ed25519_public_key
+        # Optionally update key_version if needed, or handle in client/seed logic
+        # current_user.key_version = current_user.key_version + 1
         await current_user.save()
-        logger.info(f"Public key stored/updated for user {current_user.username}")
+        logger.info(
+            f"Ed25519 public key stored/updated for user {current_user.username}"
+        )
 
-        return {"status": "success", "message": "Public key stored successfully"}
+        return {
+            "status": "success",
+            "message": "Ed25519 public key stored successfully",
+        }
 
     except HTTPException:
-        raise # Re-raise validation errors
+        raise  # Re-raise validation errors
     except Exception as e:
-        logger.error(f"Error uploading public key for user {current_user.username}: {e}", exc_info=True)
+        logger.error(
+            f"Error uploading Ed25519 key for {current_user.username}: {e}",
+            exc_info=True,
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to store public key",
+            detail="Internal server error while storing public key.",
         )
 
-class PublicKeyUpdate(BaseModel):
-    """Request model for updating a user's public key."""
-    public_key_pem: str = Field(..., description="The user's public key in PEM format")
 
-@router.post(
-    "/me/public-key",
-    response_model=Dict[str, Any],
-    responses={
-        400: {"model": ErrorResponse},
-        401: {"model": ErrorResponse},
-        422: {"model": ErrorResponse},
-    },
-)
-async def update_public_key(
-    key_data: PublicKeyUpdate = Body(...),
-    username: Optional[str] = Header(None, alias="X-Username"),
-) -> Dict[str, Any]:
-    """Update the current user's public key."""
-    try:
-        if not username:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Username header missing"
-            )
-
-        # Get user by username
-        user = await User.find_one(User.username == username)
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User not found"
-            )
-
-        # Update the user's public key
-        await user.update_public_key(key_data.public_key_pem)
-        
-        return {
-            "message": "Public key updated successfully",
-            "key_version": user.key_version
-        }
-    except ValueError as e:
-        logger.error(f"Invalid public key format: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
-    except Exception as e:
-        logger.error(f"Error updating public key: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to update public key"
-        )
+# Remove or comment out the duplicate route definition if present
+# @router.post(\"/me/public-key\", ...)
+# async def update_public_key(...): ...
 
 # --- Endpoints like /list, /{user_name}, /delete, /verify remain the same ---
-# ... [rest of the file remains the same] ...
+
+
+# --- NEW: Endpoint to get a user's public key ---
+@router.get(
+    "/{username}/public-key",
+    response_model=UserPublicKeyResponse,
+    summary="Get user's public key",
+    description="Retrieves the base64 encoded Ed25519 public key for a given username.",
+    responses={
+        401: {"model": ErrorResponse, "description": "Authentication required"},
+        404: {
+            "model": ErrorResponse,
+            "description": "User not found or key not available",
+        },
+    },
+)
+async def get_user_public_key(
+    username: str,
+    current_user: User = Depends(get_current_user),  # Require auth to call this
+):
+    """Fetches the public key for the specified user."""
+    logger.info(f"User {current_user.username} requesting public key for {username}")
+    target_user = await User.find_one(User.username == username)
+
+    if not target_user:
+        logger.warning(f"Public key request failed: User {username} not found.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+
+    if not target_user.ed25519_public_key:
+        logger.warning(
+            f"Public key request failed: User {username} has no public key registered."
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Public key not found for this user",
+        )
+
+    logger.info(f"Returning public key for user {username}")
+    return UserPublicKeyResponse(public_key=target_user.ed25519_public_key)
+
+
+# --- NEW: Passphrase Fallback Endpoints ---
+
+
+@router.post(
+    "/me/encrypted-seed",
+    status_code=status.HTTP_200_OK,
+    response_model=Dict[str, str],
+    summary="Store encrypted seed for passphrase fallback",
+    description="Stores the Argon2 parameters and the encrypted seed ciphertext for the authenticated user.",
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid data"},
+        401: {"model": ErrorResponse, "description": "Authentication required"},
+    },
+)
+async def store_encrypted_seed(
+    seed_data: EncryptedSeedRequest,  # Use the Pydantic model for request body
+    current_user: User = Depends(get_current_user),
+):
+    """Stores the encrypted seed and Argon2 parameters for the user."""
+    try:
+        # Basic validation (e.g., ensure ciphertext is not empty)
+        if not seed_data.encrypted_seed_ciphertext or not seed_data.argon2_params:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Missing encrypted seed ciphertext or Argon2 parameters.",
+            )
+
+        current_user.argon2_params = seed_data.argon2_params
+        current_user.encrypted_seed_ciphertext = seed_data.encrypted_seed_ciphertext
+        current_user.updated_at = datetime.now()  # Update timestamp
+        await current_user.save()
+        logger.info(f"Stored encrypted seed backup for user {current_user.username}")
+        return {"status": "success", "message": "Encrypted seed stored successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            f"Error storing encrypted seed for {current_user.username}: {e}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error while storing encrypted seed.",
+        )
+
+
+@router.get(
+    "/me/encrypted-seed",
+    response_model=EncryptedSeedResponse,
+    summary="Retrieve encrypted seed for passphrase fallback",
+    description="Retrieves the stored Argon2 parameters and encrypted seed ciphertext for the authenticated user.",
+    responses={
+        401: {"model": ErrorResponse, "description": "Authentication required"},
+        404: {
+            "model": ErrorResponse,
+            "description": "Encrypted seed not found for user",
+        },
+    },
+)
+async def get_encrypted_seed(
+    current_user: User = Depends(get_current_user),
+):
+    """Retrieves the stored encrypted seed and Argon2 parameters."""
+    if not current_user.encrypted_seed_ciphertext or not current_user.argon2_params:
+        logger.warning(
+            f"Encrypted seed requested but not found for user {current_user.username}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No encrypted seed backup found for this user.",
+        )
+
+    logger.info(f"Returning encrypted seed backup for user {current_user.username}")
+    return EncryptedSeedResponse(
+        argon2_params=current_user.argon2_params,
+        encrypted_seed_ciphertext=current_user.encrypted_seed_ciphertext,
+    )
+
 
 # --- Admin Endpoints ---
+
 
 @router.delete("/admin/all", response_model=dict)
 async def admin_delete_all_users():
@@ -319,38 +436,43 @@ async def admin_delete_all_users():
     try:
         # Find all users
         users = await User.find_all().to_list()
-        
+
         # For each user, delete their conversations first
         total_conversations = 0
         total_messages = 0
-        
+
         for user in users:
             # Delete conversations and messages
-            conversations = await Conversation.find(Conversation.user.id == user.id).to_list()
+            conversations = await Conversation.find(
+                Conversation.user.id == user.id
+            ).to_list()
             total_conversations += len(conversations)
-            
+
             for conversation in conversations:
-                messages = await Message.find(Message.conversation_id == conversation.id).to_list()
+                messages = await Message.find(
+                    Message.conversation_id == conversation.id
+                ).to_list()
                 total_messages += len(messages)
                 for message in messages:
                     await message.delete()
                 await conversation.delete()
-            
+
             # Delete the user
             await user.delete()
-        
+
         return {
             "status": "success",
             "users_deleted": len(users),
             "conversations_deleted": total_conversations,
-            "messages_deleted": total_messages
+            "messages_deleted": total_messages,
         }
     except Exception as e:
         logger.error(f"Admin error deleting all users: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error deleting all users: {str(e)}"
+            detail=f"Error deleting all users: {str(e)}",
         )
+
 
 @router.delete("/admin/{username}", response_model=dict)
 async def admin_delete_user(username: str):
@@ -361,28 +483,32 @@ async def admin_delete_user(username: str):
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"User {username} not found"
+                detail=f"User {username} not found",
             )
-        
+
         # Delete conversations and messages
-        conversations = await Conversation.find(Conversation.user.id == user.id).to_list()
+        conversations = await Conversation.find(
+            Conversation.user.id == user.id
+        ).to_list()
         total_messages = 0
-        
+
         for conversation in conversations:
-            messages = await Message.find(Message.conversation_id == conversation.id).to_list()
+            messages = await Message.find(
+                Message.conversation_id == conversation.id
+            ).to_list()
             total_messages += len(messages)
             for message in messages:
                 await message.delete()
             await conversation.delete()
-        
+
         # Delete the user
         await user.delete()
-        
+
         return {
             "status": "success",
             "username": username,
             "conversations_deleted": len(conversations),
-            "messages_deleted": total_messages
+            "messages_deleted": total_messages,
         }
     except HTTPException:
         raise
@@ -390,11 +516,13 @@ async def admin_delete_user(username: str):
         logger.error(f"Admin error deleting user {username}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error deleting user {username}: {str(e)}"
+            detail=f"Error deleting user {username}: {str(e)}",
         )
+
 
 class ServerPublicKeyResponse(BaseModel):
     public_key: str
+
 
 @router.get("/server-public-key", response_model=ServerPublicKeyResponse)
 async def get_server_public_key():
@@ -404,13 +532,16 @@ async def get_server_public_key():
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get server public key: {str(e)}"
+            detail=f"Failed to get server public key: {str(e)}",
         )
+
 
 class LoginRequest(BaseModel):
     """Request model for user login."""
+
     username: str
     password: str
+
 
 @router.post(
     "/login",
@@ -428,7 +559,9 @@ async def login_user(login_data: LoginRequest):
         # Find user by username
         user = await User.find_one(User.username == login_data.username)
         if not user:
-            logger.warning(f"Login attempt with non-existent username: {login_data.username}")
+            logger.warning(
+                f"Login attempt with non-existent username: {login_data.username}"
+            )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid username or password",
@@ -448,7 +581,7 @@ async def login_user(login_data: LoginRequest):
         await user.save()
 
         logger.info(f"Successful login for user: {login_data.username}")
-        
+
         # Return user data with token
         return UserResponse(
             id=str(user.id),
@@ -456,24 +589,32 @@ async def login_user(login_data: LoginRequest):
             name=user.name,
             created_at=user.created_at,
             updated_at=user.updated_at,
-            has_public_key=user.public_key is not None,
+            has_public_key=user.ed25519_public_key is not None,
             key_version=user.key_version,
-            auth_token=user.auth_token
+            auth_token=user.auth_token,
         )
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error during login for user {login_data.username}: {str(e)}", exc_info=True)
+        logger.error(
+            f"Error during login for user {login_data.username}: {str(e)}",
+            exc_info=True,
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error during login",
         )
 
+
 class UserPasswordUpdate(BaseModel):
     """Request model for updating user's password."""
+
     current_password: str = Field(..., description="Current password for verification")
-    new_password: str = Field(..., min_length=8, description="New password (min 8 characters)")
+    new_password: str = Field(
+        ..., min_length=8, description="New password (min 8 characters)"
+    )
+
 
 @router.put(
     "/me/password",
@@ -481,8 +622,14 @@ class UserPasswordUpdate(BaseModel):
     summary="Update user's password",
     description="Updates the password for the authenticated user after verifying current password.",
     responses={
-        400: {"model": ErrorResponse, "description": "Bad request (e.g., weak password)"},
-        401: {"model": ErrorResponse, "description": "Authentication required or invalid current password"},
+        400: {
+            "model": ErrorResponse,
+            "description": "Bad request (e.g., weak password)",
+        },
+        401: {
+            "model": ErrorResponse,
+            "description": "Authentication required or invalid current password",
+        },
     },
 )
 async def update_user_password(
@@ -493,7 +640,9 @@ async def update_user_password(
     try:
         # Verify current password
         if not await current_user.verify_password(update_data.current_password):
-            logger.warning(f"Failed password update attempt for user {current_user.username}: incorrect current password")
+            logger.warning(
+                f"Failed password update attempt for user {current_user.username}: incorrect current password"
+            )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Current password is incorrect",
@@ -513,7 +662,10 @@ async def update_user_password(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error updating password for user {current_user.username}: {e}", exc_info=True)
+        logger.error(
+            f"Error updating password for user {current_user.username}: {e}",
+            exc_info=True,
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update password",

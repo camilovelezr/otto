@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'dart:async';  // Add this for unawaited
+import 'dart:async'; // Add this for unawaited
 import '../models/user_model.dart';
 import 'auth_service.dart';
 import 'model_service.dart';
@@ -8,63 +8,79 @@ import 'dart:convert';
 import '../config/env_config.dart';
 import 'encryption_service.dart';
 
+// Custom Exception for Key Import Requirement
+export 'auth_service.dart' show KeyImportRequiredException;
+
 class AuthProvider extends ChangeNotifier {
   final AuthService _authService;
+  final EncryptionService _encryptionService;
   final ModelService _modelService;
-  late final EncryptionService _encryptionService;
   bool _isLoading = true;
   String? _error;
-  
+  bool _keyImportIsRequired = false;
+  User? _userPendingKeyImport;
+
+  // --- Add internal logged in state ---
+  bool _isLoggedIn = false;
+
   // Getters
   User? get currentUser => _authService.currentUser;
-  bool get isLoggedIn => _authService.isLoggedIn;
+  bool get isLoggedIn => _isLoggedIn;
   bool get isLoading => _isLoading;
   String? get error => _error;
-  
+  bool get keyImportIsRequired => _keyImportIsRequired;
+  User? get userPendingKeyImport => _userPendingKeyImport;
+
   // Alias for isLoggedIn with clearer semantics
   bool get isAuthenticated => isLoggedIn;
 
   // Constructor - Dependencies removed
-  AuthProvider({
-    AuthService? authService,
-    ModelService? modelService,
-  }) : _authService = authService ?? AuthService(),
-       _modelService = modelService ?? ModelService() {
-    _encryptionService = EncryptionService();
-    _init();
+  AuthProvider(this._authService, this._encryptionService,
+      {ModelService? modelService})
+      : _modelService = modelService ?? ModelService() {
+    _initialize();
   }
 
   // Initialize auth state
-  Future<void> _init() async {
+  Future<void> _initialize() async {
     _isLoading = true;
     notifyListeners();
-    
+
     try {
-      await _encryptionService.initializeKeys();
+      // Wait for auth service to initialize (which loads session)
       await _authService.init();
-      if (currentUser != null) {
-        // Ensure we have the server's public key
-        await _encryptionService.fetchAndStoreServerPublicKey(EnvConfig.backendUrl);
+      // --- Set internal state based on service state after init ---
+      _isLoggedIn = _authService.isLoggedIn;
+      // --- Encryption service init depends on login state now ---
+      if (_isLoggedIn) {
+        await _encryptionService.initializeKeys();
+        await _encryptionService
+            .fetchAndStoreServerPublicKey(EnvConfig.backendUrl);
+      } else {
+        debugPrint("[AuthProvider] Not logged in, skipping encryption init.");
       }
     } catch (e) {
       _setError(e);
+      _isLoggedIn = false; // Ensure logged out on init error
     } finally {
       _isLoading = false;
       notifyListeners();
     }
   }
-  
+
   // Helper method to sanitize error messages
   void _setError(dynamic exception) {
     String errorMessage = exception.toString();
-    
+
     // Remove Exception: prefix
     errorMessage = errorMessage.replaceAll(RegExp(r'^Exception: '), '');
-    
+
     // Sanitize any potentially exposed passwords or tokens
-    errorMessage = errorMessage.replaceAll(RegExp(r'"password":"[^"]*"'), '"password":"[REDACTED]"');
-    errorMessage = errorMessage.replaceAll(RegExp(r'"token":"[^"]*"'), '"token":"[REDACTED]"');
-    
+    errorMessage = errorMessage.replaceAll(
+        RegExp(r'"password":"[^"]*"'), '"password":"[REDACTED]"');
+    errorMessage = errorMessage.replaceAll(
+        RegExp(r'"token":"[^"]*"'), '"token":"[REDACTED]"');
+
     // Clean up common error messages for better user experience
     if (errorMessage.contains('Username already exists')) {
       errorMessage = 'Username already exists. Please choose a different one.';
@@ -79,26 +95,28 @@ class AuthProvider extends ChangeNotifier {
     } else if (errorMessage.contains('Field required')) {
       errorMessage = 'Please fill in all required fields.';
     }
-    
+
     _error = errorMessage;
   }
-  
+
   // Load models after login (renamed from _syncModelsAfterLogin)
   Future<void> _loadModelsAfterLogin() async {
     try {
       if (currentUser != null) {
         // Only use the /models/list endpoint to fetch models
         final models = await _modelService.getModels();
-        
+
         if (models.isNotEmpty) {
-          debugPrint('Successfully fetched ${models.length} models after login');
+          debugPrint(
+              'Successfully fetched ${models.length} models after login');
         } else {
           // If first attempt returns no models, try once more after a short delay
           await Future.delayed(Duration(milliseconds: 500));
           final retryModels = await _modelService.getModels();
-          
+
           if (retryModels.isNotEmpty) {
-            debugPrint('Successfully fetched ${retryModels.length} models on retry after login');
+            debugPrint(
+                'Successfully fetched ${retryModels.length} models on retry after login');
           } else {
             debugPrint('No models available after login attempts');
           }
@@ -109,82 +127,116 @@ class AuthProvider extends ChangeNotifier {
       // Don't show the error to the user as this is a background operation
     }
   }
-  
+
   // Login with username and password
   Future<bool> login(String username, String password) async {
     _isLoading = true;
-    _error = null;  // Clear any previous errors
+    _error = null; // Clear any previous errors
+    _isLoggedIn = false; // Assume failure initially
+    _keyImportIsRequired = false;
+    _userPendingKeyImport = null;
     notifyListeners();
-    
+
     try {
       // Initialize encryption and fetch server public key first
+      // This is needed before login attempt for key exchange/validation
       await _encryptionService.initializeKeys();
-      await _encryptionService.fetchAndStoreServerPublicKey(EnvConfig.backendUrl);
+      await _encryptionService
+          .fetchAndStoreServerPublicKey(EnvConfig.backendUrl);
 
       await _authService.login(username, password);
-      
-      // After successful login, load models
+      // --- Set internal state on success ---
+      _isLoggedIn = true;
+
+      // After successful login, load models and check/upload public key
       if (currentUser != null) {
-        debugPrint('Login successful, loading models for user: ${currentUser!.id}');
-        // Run model loading in the background to not block the UI
-        unawaited(_loadModelsAfterLogin());  // Use unawaited to not block
+        debugPrint(
+            'Login successful, loading models for user: ${currentUser!.id}');
+        unawaited(_loadModelsAfterLogin());
+        debugPrint(
+            'Checking if public key needs upload for user: ${currentUser!.id}');
+        unawaited(_authService.checkAndUploadPublicKey());
       }
 
       _isLoading = false;
       notifyListeners();
       return true;
+    } on KeyImportRequiredException catch (e) {
+      debugPrint(
+          '[AuthProvider.login] Caught KeyImportRequiredException for user ${e.user.username}');
+      _isLoading = false;
+      _error = 'Logged in, but key import is required to continue.';
+      _keyImportIsRequired = true;
+      _userPendingKeyImport = e.user;
+      // --- Set internal state (technically logged in, but needs keys) ---
+      _isLoggedIn = true;
+      notifyListeners();
+      return false; // Indicate overall process needs user action
     } catch (e) {
       _isLoading = false;
+      _isLoggedIn = false; // Explicitly set to false on error
       _setError(e);
       notifyListeners();
       return false;
     }
   }
-  
+
   // Register a new user
-  Future<bool> register(String username, String password, String displayName) async {
+  Future<bool> register(
+      String username, String password, String displayName) async {
     _isLoading = true;
     _error = null;
+    _isLoggedIn = false; // Assume failure initially
     notifyListeners();
-    
+
     try {
       // Initialize encryption and fetch server public key first
       await _encryptionService.initializeKeys();
-      await _encryptionService.fetchAndStoreServerPublicKey(EnvConfig.backendUrl);
+      await _encryptionService
+          .fetchAndStoreServerPublicKey(EnvConfig.backendUrl);
 
       await _authService.register(username, password, displayName);
+      // --- Set internal state on success ---
+      _isLoggedIn = true;
       _isLoading = false;
       notifyListeners();
 
       // After successful registration, load models
       if (currentUser != null) {
-        debugPrint('Registration successful, loading models for user: ${currentUser!.id}');
-        // Run model loading in the background to not block the UI
+        debugPrint(
+            'Registration successful, loading models for user: ${currentUser!.id}');
         _loadModelsAfterLogin();
       }
-      // Key fetching logic removed
 
       return true;
     } catch (e) {
       _isLoading = false;
+      _isLoggedIn = false; // Explicitly set to false on error
       _setError(e);
       notifyListeners();
       return false;
     }
   }
-  
+
   // Logout the current user
   Future<void> logout() async {
     _isLoading = true;
     notifyListeners();
-    
+
     try {
       await _authService.logout();
-      // Key clearing logic removed
+      // --- Set internal state on logout ---
+      _isLoggedIn = false;
+      _keyImportIsRequired = false;
+      _userPendingKeyImport = null;
     } catch (e) {
       _setError(e);
     } finally {
       _isLoading = false;
+      // --- Ensure logged out state even if logout API fails ---
+      _isLoggedIn = false;
+      _keyImportIsRequired = false;
+      _userPendingKeyImport = null;
       notifyListeners();
     }
   }
@@ -211,7 +263,8 @@ class AuthProvider extends ChangeNotifier {
   }
 
   // Update user's password
-  Future<bool> updatePassword(String currentPassword, String newPassword) async {
+  Future<bool> updatePassword(
+      String currentPassword, String newPassword) async {
     _isLoading = true;
     _error = null;
     notifyListeners();
@@ -227,7 +280,17 @@ class AuthProvider extends ChangeNotifier {
       return false;
     }
   }
-  
+
+  // Method to be called after successful key import
+  void completeKeyImport() {
+    if (_keyImportIsRequired) {
+      _keyImportIsRequired = false;
+      _userPendingKeyImport = null;
+      // User is already logged in, just notify UI to proceed
+      notifyListeners();
+    }
+  }
+
   // Clear any error messages
   void clearError() {
     _error = null;

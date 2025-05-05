@@ -7,8 +7,8 @@ import '../services/chat_provider.dart';
 import 'theme_toggle.dart';
 import 'dart:math' as math; // Use math prefix
 import '../services/auth_provider.dart';
-import '../screens/export_key_screen.dart'; // Import export screen
-import '../screens/import_key_screen.dart'; // Import import screen
+import '../screens/export_identity_screen.dart';
+import '../screens/import_identity_screen.dart';
 import '../models/conversation_summary.dart'; // Import ConversationSummary
 import '../theme/app_spacing.dart'; // Import AppSpacing
 // Removed intl import as cost info is removed
@@ -38,7 +38,7 @@ class _SidePanelState extends State<SidePanel> {
   void didUpdateWidget(SidePanel oldWidget) {
     super.didUpdateWidget(oldWidget);
   }
-  
+
   @override
   void dispose() {
     super.dispose();
@@ -49,7 +49,7 @@ class _SidePanelState extends State<SidePanel> {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final chatProvider = context.watch<ChatProvider>();
-    
+
     return Container(
       color: colorScheme.surface,
       child: SafeArea(
@@ -60,7 +60,8 @@ class _SidePanelState extends State<SidePanel> {
             _buildNewConversationButton(theme, chatProvider),
             const SizedBox(height: AppSpacing.blockSpacing),
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.pagePaddingHorizontal / 2),
+              padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.pagePaddingHorizontal / 2),
               child: Text(
                 'Conversations',
                 style: theme.textTheme.titleSmall?.copyWith(
@@ -84,7 +85,8 @@ class _SidePanelState extends State<SidePanel> {
     );
   }
 
-  Widget _buildNewConversationButton(ThemeData theme, ChatProvider chatProvider) {
+  Widget _buildNewConversationButton(
+      ThemeData theme, ChatProvider chatProvider) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: AppSpacing.inlineSpacing),
       child: SizedBox(
@@ -99,7 +101,8 @@ class _SidePanelState extends State<SidePanel> {
           style: ElevatedButton.styleFrom(
             backgroundColor: theme.colorScheme.primaryContainer,
             foregroundColor: theme.colorScheme.onPrimaryContainer,
-            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.inlineSpacing),
+            padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.inlineSpacing),
           ),
           child: LayoutBuilder(
             builder: (context, constraints) {
@@ -138,7 +141,8 @@ class _SidePanelState extends State<SidePanel> {
           padding: const EdgeInsets.all(AppSpacing.pagePaddingHorizontal),
           child: Text(
             'No conversations yet.',
-            style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.outline),
+            style: theme.textTheme.bodyMedium
+                ?.copyWith(color: theme.colorScheme.outline),
             textAlign: TextAlign.center,
           ),
         ),
@@ -156,7 +160,9 @@ class _SidePanelState extends State<SidePanel> {
           onEnter: (_) => setState(() => _hoveredIndex = index),
           onExit: (_) => setState(() => _hoveredIndex = null),
           child: Material(
-            color: isSelected ? theme.colorScheme.primaryContainer.withOpacity(0.4) : Colors.transparent,
+            color: isSelected
+                ? theme.colorScheme.primaryContainer.withOpacity(0.4)
+                : Colors.transparent,
             child: InkWell(
               onTap: () {
                 chatProvider.loadConversation(conversation.id);
@@ -173,8 +179,11 @@ class _SidePanelState extends State<SidePanel> {
                       child: Text(
                         conversation.title ?? 'New Conversation',
                         style: theme.textTheme.bodyMedium?.copyWith(
-                          fontWeight: isSelected ? FontWeight.w500 : FontWeight.normal,
-                          color: isSelected ? theme.colorScheme.primary : theme.colorScheme.onSurface,
+                          fontWeight:
+                              isSelected ? FontWeight.w500 : FontWeight.normal,
+                          color: isSelected
+                              ? theme.colorScheme.primary
+                              : theme.colorScheme.onSurface,
                         ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -187,7 +196,8 @@ class _SidePanelState extends State<SidePanel> {
                         tooltip: 'Delete Conversation',
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(),
-                        onPressed: () => _confirmDeleteConversation(context, chatProvider, conversation),
+                        onPressed: () => _confirmDeleteConversation(
+                            context, chatProvider, conversation),
                       ),
                   ],
                 ),
@@ -198,13 +208,15 @@ class _SidePanelState extends State<SidePanel> {
       },
     );
   }
-  
-  Future<void> _confirmDeleteConversation(BuildContext context, ChatProvider chatProvider, ConversationSummary conversation) async {
+
+  Future<void> _confirmDeleteConversation(BuildContext context,
+      ChatProvider chatProvider, ConversationSummary conversation) async {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Delete Conversation?'),
-        content: Text('Are you sure you want to delete "${conversation.title ?? 'this conversation'}"? This action cannot be undone.'),
+        content: Text(
+            'Are you sure you want to delete "${conversation.title ?? 'this conversation'}"? This action cannot be undone.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -212,7 +224,8 @@ class _SidePanelState extends State<SidePanel> {
           ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(true),
-            style: TextButton.styleFrom(foregroundColor: Theme.of(context).colorScheme.error),
+            style: TextButton.styleFrom(
+                foregroundColor: Theme.of(context).colorScheme.error),
             child: const Text('Delete'),
           ),
         ],
@@ -225,7 +238,8 @@ class _SidePanelState extends State<SidePanel> {
       if (mounted && chatProvider.error != null) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to delete conversation: ${chatProvider.error}'),
+            content:
+                Text('Failed to delete conversation: ${chatProvider.error}'),
             backgroundColor: Theme.of(context).colorScheme.error,
           ),
         );
@@ -236,7 +250,9 @@ class _SidePanelState extends State<SidePanel> {
 
   Widget _buildFooter(ThemeData theme) {
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    final displayName = authProvider.currentUser?.name ?? authProvider.currentUser?.username ?? 'User';
+    final displayName = authProvider.currentUser?.name ??
+        authProvider.currentUser?.username ??
+        'User';
     final colorScheme = theme.colorScheme;
     final chatProvider = context.watch<ChatProvider>();
 
@@ -251,7 +267,10 @@ class _SidePanelState extends State<SidePanel> {
                 radius: 14,
                 backgroundColor: theme.colorScheme.secondaryContainer,
                 child: Text(
-                  authProvider.currentUser?.name.substring(0, 1).toUpperCase() ?? '?',
+                  authProvider.currentUser?.name
+                          .substring(0, 1)
+                          .toUpperCase() ??
+                      '?',
                   style: theme.textTheme.bodySmall?.copyWith(
                     fontWeight: FontWeight.bold,
                     color: theme.colorScheme.onSecondaryContainer,
@@ -288,7 +307,8 @@ class _SidePanelState extends State<SidePanel> {
                   color: colorScheme.onSurface.withOpacity(0.7),
                   padding: EdgeInsets.zero,
                   visualDensity: VisualDensity.compact,
-                  constraints: const BoxConstraints(minWidth: 24, minHeight: 24, maxWidth: 24, maxHeight: 24),
+                  constraints: const BoxConstraints(
+                      minWidth: 24, minHeight: 24, maxWidth: 24, maxHeight: 24),
                 ),
               ),
             ],
@@ -299,7 +319,7 @@ class _SidePanelState extends State<SidePanel> {
             children: [
               TextButton.icon(
                 icon: const Icon(Icons.file_upload_outlined, size: 18),
-                label: const Text('Export Keys'),
+                label: const Text('Export Identity'),
                 style: TextButton.styleFrom(
                   foregroundColor: theme.colorScheme.onSurface.withOpacity(0.7),
                   textStyle: theme.textTheme.bodySmall,
@@ -308,14 +328,16 @@ class _SidePanelState extends State<SidePanel> {
                   if (Scaffold.of(context).isDrawerOpen) {
                     Navigator.of(context).pop();
                   }
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (context) => const ExportKeyScreen()),
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (context) => const ExportIdentityScreen()),
                   );
                 },
               ),
               TextButton.icon(
                 icon: const Icon(Icons.file_download_outlined, size: 18),
-                label: const Text('Import Keys'),
+                label: const Text('Import Identity'),
                 style: TextButton.styleFrom(
                   foregroundColor: theme.colorScheme.onSurface.withOpacity(0.7),
                   textStyle: theme.textTheme.bodySmall,
@@ -324,8 +346,10 @@ class _SidePanelState extends State<SidePanel> {
                   if (Scaffold.of(context).isDrawerOpen) {
                     Navigator.of(context).pop();
                   }
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (context) => const ImportKeyScreen()),
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (context) => const ImportIdentityScreen()),
                   );
                 },
               ),
@@ -346,13 +370,20 @@ class _SidePanelState extends State<SidePanel> {
                 setState(() => _isDebugInfoExpanded = expanded);
               },
               children: [
-                _buildDebugInfoRow('Username:', authProvider.currentUser?.username ?? 'N/A'),
-                _buildDebugInfoRow('Conv ID:', chatProvider.conversationId ?? 'None'),
-                _buildDebugInfoRow('Messages:', chatProvider.messages.length.toString()),
-                _buildDebugInfoRow('Loading Chat:', chatProvider.isLoading.toString()),
-                _buildDebugInfoRow('Loading Conv List:', chatProvider.isLoadingConversations.toString()),
-                _buildDebugInfoRow('Selected Model:', chatProvider.selectedModel?.modelId ?? 'None'),
-                _buildDebugInfoRow('Available Models:', chatProvider.availableModels.length.toString()),
+                _buildDebugInfoRow(
+                    'Username:', authProvider.currentUser?.username ?? 'N/A'),
+                _buildDebugInfoRow(
+                    'Conv ID:', chatProvider.conversationId ?? 'None'),
+                _buildDebugInfoRow(
+                    'Messages:', chatProvider.messages.length.toString()),
+                _buildDebugInfoRow(
+                    'Loading Chat:', chatProvider.isLoading.toString()),
+                _buildDebugInfoRow('Loading Conv List:',
+                    chatProvider.isLoadingConversations.toString()),
+                _buildDebugInfoRow('Selected Model:',
+                    chatProvider.selectedModel?.modelId ?? 'None'),
+                _buildDebugInfoRow('Available Models:',
+                    chatProvider.availableModels.length.toString()),
                 _buildDebugInfoRow('Error:', chatProvider.error ?? 'None'),
               ],
             ),
@@ -369,17 +400,16 @@ class _SidePanelState extends State<SidePanel> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            '$label ', 
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.outline,
-              fontWeight: FontWeight.w500,
-            )
-          ),
+          Text('$label ',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.outline,
+                fontWeight: FontWeight.w500,
+              )),
           Expanded(
             child: SelectableText(
-              value, 
-              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+              value,
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.colorScheme.outline),
             ),
           ),
         ],
@@ -387,14 +417,15 @@ class _SidePanelState extends State<SidePanel> {
     );
   }
 
-  Future<void> _showSignOutConfirmation(BuildContext context, ThemeData theme, AuthProvider authProvider) async {
+  Future<void> _showSignOutConfirmation(
+      BuildContext context, ThemeData theme, AuthProvider authProvider) async {
     final isDark = theme.brightness == Brightness.dark;
 
     return showDialog(
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
-          backgroundColor: isDark 
+          backgroundColor: isDark
               ? Color.lerp(theme.colorScheme.surface, Colors.black, 0.3)
               : Color.lerp(theme.colorScheme.surface, Colors.white, 0.3),
           surfaceTintColor: Colors.transparent,

@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:flutter/services.dart';
 import 'services/chat_provider.dart';
 import 'services/auth_provider.dart';
+import 'services/auth_service.dart'; // Import AuthService
 import 'services/encryption_service.dart'; // Import EncryptionService
 import 'services/chat_service.dart'; // Import ChatService
 import 'theme/theme_provider.dart';
@@ -11,6 +12,10 @@ import 'package:google_fonts/google_fonts.dart'; // Import Google Fonts
 import 'screens/chat_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/register_screen.dart';
+import 'screens/settings_screen.dart';
+import 'screens/model_management_screen.dart';
+import 'screens/export_identity_screen.dart';
+import 'screens/import_identity_screen.dart';
 import 'config/env_config.dart';
 import 'theme/app_spacing_example.dart';
 
@@ -25,7 +30,7 @@ void main() async {
       systemNavigationBarDividerColor: Colors.transparent,
     ));
   }
-  
+
   try {
     // Load environment configuration with error handling
     await EnvConfig.load().catchError((error) {
@@ -37,43 +42,56 @@ void main() async {
     // Catch any errors from environment loading to prevent app crash
     debugPrint('Caught error during environment loading: $e');
   }
-  
-  // Initialize encryption service and fetch server public key
-  final encryptionService = EncryptionService();
+
+  // Instantiate services (AuthService first, then EncryptionService)
+  final authService = AuthService();
+  final encryptionService = EncryptionService(authService);
+
+  // Initialize AuthService (which now initializes EncryptionService internally)
+  // Handle potential init errors
   try {
-    await encryptionService.initializeKeys();
-    await encryptionService.fetchAndStoreServerPublicKey(EnvConfig.backendUrl);
-    debugPrint('Successfully initialized encryption and fetched server public key');
+    await authService.init();
+    debugPrint(
+        'AuthService initialized successfully (includes EncryptionService init)');
   } catch (e) {
-    debugPrint('Error initializing encryption: $e');
+    debugPrint('Error initializing AuthService: $e');
+    // Handle critical initialization failure (e.g., show error screen)
   }
-  
-  runApp(MyApp(encryptionService: encryptionService));
+
+  runApp(MyApp(authService: authService, encryptionService: encryptionService));
 }
 
 class MyApp extends StatelessWidget {
+  final AuthService authService;
   final EncryptionService encryptionService;
-  
-  const MyApp({Key? key, required this.encryptionService}) : super(key: key);
+
+  const MyApp(
+      {super.key, required this.authService, required this.encryptionService});
 
   @override
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
-        // Provide the pre-initialized EncryptionService
-        Provider.value(value: encryptionService),
+        // Provide the pre-initialized services
+        Provider<AuthService>.value(value: authService),
+        Provider<EncryptionService>.value(value: encryptionService),
+
         ChangeNotifierProvider(create: (_) => ThemeProvider()),
-        // Create ChatService within ChatProvider's create, passing EncryptionService
+
+        // Update ChatProvider to get EncryptionService from Provider
         ChangeNotifierProvider(
-          create: (context) => ChatProvider(
-             chatService: ChatService(
-               encryptionService: encryptionService // Use the pre-initialized service
-             )
-          )
-        ),
+            create: (context) => ChatProvider(
+                chatService: ChatService(
+                    // Read services from context/provider
+                    authService: context.read<AuthService>(),
+                    encryptionService: context.read<EncryptionService>()))),
+        // Update AuthProvider to get services from Provider
         ChangeNotifierProvider(
-          create: (context) => AuthProvider()
-        ),
+            create: (context) => AuthProvider(
+                  context.read<AuthService>(),
+                  context.read<EncryptionService>(), // Pass EncryptionService
+                  // Consider providing ModelService too if needed
+                )),
       ],
       child: Consumer<ThemeProvider>(
         builder: (context, themeProvider, _) {
@@ -81,11 +99,13 @@ class MyApp extends StatelessWidget {
             title: 'Otto',
             debugShowCheckedModeBanner: false,
             theme: themeProvider.lightTheme.copyWith(
-              textTheme: GoogleFonts.robotoTextTheme(themeProvider.lightTheme.textTheme),
+              textTheme: GoogleFonts.robotoTextTheme(
+                  themeProvider.lightTheme.textTheme),
               platform: TargetPlatform.macOS,
             ),
             darkTheme: themeProvider.darkTheme.copyWith(
-              textTheme: GoogleFonts.robotoTextTheme(themeProvider.darkTheme.textTheme),
+              textTheme: GoogleFonts.robotoTextTheme(
+                  themeProvider.darkTheme.textTheme),
               platform: TargetPlatform.macOS,
             ),
             themeMode: themeProvider.themeMode,
@@ -111,7 +131,11 @@ class AuthWrapper extends StatelessWidget {
   Widget build(BuildContext context) {
     final authProvider = Provider.of<AuthProvider>(context);
     final chatProvider = Provider.of<ChatProvider>(context, listen: false);
-    
+
+    // Log state every time AuthWrapper rebuilds
+    debugPrint(
+        '[AuthWrapper] Build: isLoading=${authProvider.isLoading}, keyImportIsRequired=${authProvider.keyImportIsRequired}, isLoggedIn=${authProvider.isLoggedIn}');
+
     // Show loading spinner while checking auth state
     if (authProvider.isLoading) {
       return const Scaffold(
@@ -120,7 +144,14 @@ class AuthWrapper extends StatelessWidget {
         ),
       );
     }
-    
+
+    // If key import is required, show the ImportIdentityScreen
+    if (authProvider.keyImportIsRequired) {
+      debugPrint(
+          '[AuthWrapper] Key import required, showing ImportIdentityScreen.');
+      return const ImportIdentityScreen();
+    }
+
     // Redirect based on auth state
     if (authProvider.isLoggedIn) {
       // Set the user's username in ChatProvider
@@ -128,10 +159,11 @@ class AuthWrapper extends StatelessWidget {
       if (currentUser != null) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           chatProvider.setUserId(
-            currentUser.id?.toString() ?? currentUser.username, // Keep ID logic
-            username: currentUser.username, // Keep username for auth header
-            name: currentUser.name // Pass the display name
-          );
+              currentUser.id?.toString() ??
+                  currentUser.username, // Keep ID logic
+              username: currentUser.username, // Keep username for auth header
+              name: currentUser.name // Pass the display name
+              );
         });
       }
       return const ChatScreen();

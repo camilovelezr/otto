@@ -3,7 +3,8 @@ import 'package:flutter/foundation.dart';
 // Only import dart:io for non-web platforms
 import 'package:flutter/services.dart';
 // Import dart:js_util only for web
-import 'dart:js_util' if (dart.library.io) 'package:otto/config/js_util_stub.dart';
+import 'dart:js_util'
+    if (dart.library.io) 'package:otto/config/js_util_stub.dart';
 
 // Import dart:io only for non-web platforms
 import 'dart:io' if (dart.library.js) 'package:otto/config/platform_stub.dart';
@@ -13,10 +14,11 @@ class EnvConfig {
   factory EnvConfig() => _instance;
   EnvConfig._internal();
 
-  static const MethodChannel _channel = MethodChannel('com.example.aithena_chat/config');
+  static const MethodChannel _channel =
+      MethodChannel('com.example.otto/config');
   static String? _androidBaseUrl;
   static Map<String, dynamic>? _webConfig;
-  
+
   // Getter for baseUrl that checks for platform-specific values first
   static String get backendUrl {
     // On web, we use the web configuration
@@ -26,7 +28,7 @@ class EnvConfig {
       }
       return dotenv.env['BACKEND_URL'] ?? 'http://localhost:8088';
     }
-    
+
     // If we're on Android and have a specific Android BASE_URL set, use that
     if (!kIsWeb) {
       bool isAndroid = false;
@@ -35,16 +37,16 @@ class EnvConfig {
       } catch (e) {
         // Ignore platform errors
       }
-      
+
       if (isAndroid && _androidBaseUrl != null) {
         return _androidBaseUrl!;
       }
     }
-    
+
     // Otherwise fallback to the .env value or default
     return dotenv.env['BACKEND_URL'] ?? 'http://localhost:8088';
   }
-  
+
   // Add apiUrl getter for auth service
   static String? get apiUrl {
     // On web, we use the web configuration
@@ -52,13 +54,13 @@ class EnvConfig {
       if (_webConfig != null && _webConfig!.containsKey('apiUrl')) {
         return _webConfig!['apiUrl'] as String;
       }
-      return dotenv.env['API_URL'] ?? 'http://localhost:3000/api';
+      return dotenv.env['API_URL'] ?? 'http://localhost:8088';
     }
-    
+
     // For other platforms, get from env or use default
-    return dotenv.env['API_URL'] ?? 'http://localhost:3000/api';
+    return dotenv.env['API_URL'] ?? 'http://localhost:8088';
   }
-  
+
   static bool get debugMode {
     if (kIsWeb && _webConfig != null && _webConfig!.containsKey('debugMode')) {
       return _webConfig!['debugMode'] as bool;
@@ -80,12 +82,13 @@ class EnvConfig {
     } catch (e) {
       debugPrint('Error loading .env file: $e');
     }
-    
+
     // On web, try to load configuration from the JavaScript context
     if (kIsWeb) {
       try {
         // Try to call the JavaScript function defined in index.html
-        final jsConfig = await promiseToFuture(callMethod(globalThis, 'getWebConfig', []));
+        final jsConfig =
+            await promiseToFuture(callMethod(globalThis, 'getWebConfig', []));
         if (jsConfig != null) {
           _webConfig = Map<String, dynamic>.from(jsConfig);
           debugPrint('Loaded web configuration: $_webConfig');
@@ -94,7 +97,7 @@ class EnvConfig {
         debugPrint('Could not load web configuration: $e');
       }
     }
-    
+
     // If we're on Android (not on web), try to get the BASE_URL from the native side
     if (!kIsWeb) {
       bool isAndroid = false;
@@ -103,7 +106,7 @@ class EnvConfig {
       } catch (e) {
         // Ignore platform errors
       }
-      
+
       if (isAndroid) {
         try {
           final String url = await _channel.invokeMethod('getBaseUrl');
@@ -117,5 +120,6 @@ class EnvConfig {
   }
 
   @override
-  String toString() => 'EnvConfig(backendUrl: $backendUrl, debugMode: $debugMode)';
-} 
+  String toString() =>
+      'EnvConfig(backendUrl: $backendUrl, debugMode: $debugMode)';
+}

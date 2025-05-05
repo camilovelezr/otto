@@ -1,23 +1,26 @@
-[tool.poetry]
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
 name = "mongython"
 version = "0.1.0"
 description = "MongoDB Backend for Flutter-Otto"
-authors = ["Camilo Velez <camilov61@gmail.com>"]
+authors = [{ name = "Camilo Velez", email = "camilov61@gmail.com" }]
+requires-python = "~=3.11"
 readme = "README.md"
+dependencies = [
+    "beanie>=1.29.0,<2",
+    "fastapi[standard]>=0.115.10,<0.116",
+    "openai>=1.65.2,<2",
+    "bcrypt>=4.3.0,<5",
+    "dotenv>=0.9.9,<0.10",
+    "httpx>=0.27.0,<0.28",
+    "cryptography>=43.0.0,<44",
+]
 
-[tool.poetry.dependencies]
-python = "^3.11"
-beanie = "^1.29.0"
-fastapi = {extras = ["standard"], version = "^0.115.10"}
-openai = "^1.65.2"
-bcrypt = "^4.3.0"
-dotenv = "^0.9.9"
-httpx = "^0.27.0"
-cryptography = "^43.0.0" # Added for E2EE
-
-[tool.poetry.scripts]
+[project.scripts]
 mongython = "mongython.cli:main"
 
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+[tool.hatch.build.targets.wheel]
+packages = ["src/mongython"]

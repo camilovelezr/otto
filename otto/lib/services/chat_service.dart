@@ -1,53 +1,91 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io'; // For Platform check if needed
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
+import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:web_socket_channel/status.dart' as status;
 import 'dart:math'; // Import for min function
 import '../models/chat_message.dart';
-import '../models/llm_model.dart';
+import '../models/conversation_summary.dart';
 import '../config/env_config.dart';
-import 'model_service.dart'; // Import for defaultObjectId
+import '../models/llm_model.dart';
 import 'encryption_service.dart'; // Import EncryptionService
+import 'auth_service.dart'; // Need AuthService for headers
 
 class ChatService {
-  final String _baseUrl;
-  final http.Client _client;
-  String? _currentUsername;
+  WebSocketChannel? _channel;
+  StreamController<ChatMessage> _messageStreamController =
+      StreamController.broadcast();
+  StreamController<ConversationSummary> _conversationStreamController =
+      StreamController.broadcast();
+  StreamController<String> _errorStreamController =
+      StreamController.broadcast();
+  final Map<String, ConversationSummary> _conversations = {};
+  String? _currentUserId;
+  String? _currentUsername; // Keep username for auth header
+  String? _currentDisplayName; // Keep display name
+
+  // Rate limiting state
+  DateTime? _lastMessageSentTime;
+  final Duration _rateLimitDuration =
+      const Duration(milliseconds: 500); // Example: 500ms between messages
+
+  // Connection state
+  bool _isConnected = false;
+  bool _isConnecting = false;
+  Timer? _reconnectTimer;
+  int _reconnectAttempts = 0;
+  final int _maxReconnectAttempts = 5; // Max reconnect attempts
+  final Duration _initialReconnectDelay =
+      const Duration(seconds: 2); // Initial delay
 
   // Cached models to avoid frequent reloading
   List<String>? _cachedModels;
   DateTime? _modelsCacheTime;
 
   // Increased timeout durations
-  static const Duration _shortTimeout = Duration(seconds: 20);  // From 10 to 20 seconds
-  static const Duration _longTimeout = Duration(seconds: 60);   // From 15 to 60 seconds
+  static const Duration _shortTimeout =
+      Duration(seconds: 20); // From 10 to 20 seconds
+  static const Duration _longTimeout =
+      Duration(seconds: 60); // From 15 to 60 seconds
 
   static const Duration _modelCacheLifetime = Duration(minutes: 10);
 
   // Add EncryptionService instance
   final EncryptionService _encryptionService;
+  final AuthService _authService; // Added AuthService
 
-  ChatService({http.Client? client, EncryptionService? encryptionService}) :
-    _baseUrl = EnvConfig.backendUrl,
-    _client = client ?? http.Client(),
-    _encryptionService = encryptionService ?? EncryptionService() { // Initialize EncryptionService
-    // Log the base URL for debugging
-    debugPrint('ChatService initialized with base URL: $_baseUrl');
-  }
+  Stream<ChatMessage> get messages => _messageStreamController.stream;
+  Stream<ConversationSummary> get conversations =>
+      _conversationStreamController.stream;
+  Stream<String> get errors => _errorStreamController.stream;
+  bool get isConnected => _isConnected;
 
-  // Get the current user ID, defaulting to a valid ObjectId if not set
-  String get _currentUserId {
-    if (_currentUsername == null || _currentUsername!.isEmpty) {
-      return defaultObjectId;
-    }
-    return _currentUsername!;
+  // HTTP Client and Base URL (Keep these)
+  final http.Client _client;
+  final String _baseUrl;
+
+  ChatService(
+      {required AuthService authService,
+      required EncryptionService encryptionService,
+      http.Client? client})
+      : _authService = authService,
+        _encryptionService = encryptionService,
+        _client = client ?? http.Client(), // Initialize client
+        _baseUrl = EnvConfig.backendUrl // Initialize baseUrl
+  {
+    debugPrint('[ChatService] Instance created.');
   }
 
   // Set current username for authentication
-  void setCurrentUsername(String username) {
+  void setUserDetails(String userId, String username, String name) {
+    _currentUserId = userId;
     _currentUsername = username;
-    debugPrint('ChatService: Set current username to $_currentUsername');
+    _currentDisplayName = name;
+    debugPrint(
+        '[ChatService] User details set: ID=$userId, Username=$username, Name=$name');
   }
 
   // Helper method to get the appropriate API URL based on platform
@@ -67,11 +105,7 @@ class ChatService {
 
   // Helper method to get common headers for API requests
   Future<Map<String, String>> _getHeaders() async {
-    return {
-      'Content-Type': 'application/json; charset=utf-8', // Ensure UTF-8
-      'Accept': 'application/json',
-      'X-Username': _currentUsername ?? defaultObjectId,
-    };
+    return await _authService.getAuthHeaders();
   }
 
   // Conversation management methods
@@ -84,10 +118,12 @@ class ChatService {
 
       if (response.statusCode == 201 || response.statusCode == 200) {
         // Explicitly decode response body as UTF-8 before JSON decoding
-        final Map<String, dynamic> data = json.decode(utf8.decode(response.bodyBytes));
+        final Map<String, dynamic> data =
+            json.decode(utf8.decode(response.bodyBytes));
         return data['id'];
       } else {
-        throw Exception('Failed to create conversation: ${response.statusCode}');
+        throw Exception(
+            'Failed to create conversation: ${response.statusCode}');
       }
     } catch (e) {
       debugPrint('Error creating conversation: $e');
@@ -95,37 +131,27 @@ class ChatService {
     }
   }
 
-  Future<void> addMessageToConversation(String conversationId, String content, String role) async {
+  Future<void> addMessageToConversation(
+      String conversationId, String content, String role) async {
+    debugPrint(
+        "[ChatService] WARNING: addMessageToConversation sending PLAINTEXT. E2EE required.");
     try {
-      // Only encrypt user messages
       Map<String, dynamic> requestBody;
       if (role == 'user') {
-        try {
-          final encryptedData = await _encryptionService.encryptMessage(content);
-          requestBody = {
-            'content': null,
-            'encrypted_content': encryptedData['encrypted_content'],
-            'encrypted_key': encryptedData['encrypted_key'],
-            'iv': encryptedData['iv'],
-            'tag': encryptedData['tag'],
-            'is_encrypted': true,
-            'role': role,
-          };
-        } catch (e) {
-          debugPrint('Failed to encrypt message: $e');
-          throw Exception('Failed to encrypt message: $e');
-        }
+        // Plaintext for now
+        requestBody = {
+          'content': content,
+          'role': role,
+          'is_encrypted': false, // Indicate plaintext
+        };
       } else {
-        // For non-user messages (system messages, etc.)
-        throw Exception('All messages must be encrypted');
+        throw Exception('Only user messages should be added via this method.');
       }
-
       final response = await http.post(
         Uri.parse('$_baseUrl/chat/$conversationId/messages'),
         headers: await _getHeaders(),
         body: json.encode(requestBody),
       );
-
       if (response.statusCode != 200) {
         throw Exception('Failed to add message: ${response.statusCode}');
       }
@@ -135,21 +161,26 @@ class ChatService {
     }
   }
 
-  Future<void> updateConversationTitle(String conversationId, {bool forceUpdate = false, required String userId}) async {
+  Future<void> updateConversationTitle(String conversationId,
+      {bool forceUpdate = false, required String userId}) async {
     try {
-      debugPrint('Updating title for conversation $conversationId, force update: $forceUpdate');
+      debugPrint(
+          'Updating title for conversation $conversationId, force update: $forceUpdate');
 
-      final response = await _client.put(
-        Uri.parse('$_baseUrl/conversations/$conversationId/update_title'),
-        headers: await _getHeaders(),
-        body: json.encode({
-          'title': 'Auto-generated Title',
-          'force_update': forceUpdate,
-        }),
-      ).timeout(_shortTimeout);
+      final response = await _client
+          .put(
+            Uri.parse('$_baseUrl/conversations/$conversationId/update_title'),
+            headers: await _getHeaders(),
+            body: json.encode({
+              'title': 'Auto-generated Title',
+              'force_update': forceUpdate,
+            }),
+          )
+          .timeout(_shortTimeout);
 
       if (response.statusCode != 200) {
-        debugPrint('Failed to update title: ${response.statusCode}, Body: ${response.body}');
+        debugPrint(
+            'Failed to update title: ${response.statusCode}, Body: ${response.body}');
         throw Exception('Failed to update title: ${response.statusCode}');
       }
 
@@ -160,23 +191,27 @@ class ChatService {
     }
   }
 
-  Future<List<dynamic>> getConversations(String userId) async {
+  Future<List<ConversationSummary>> getConversations(String userId) async {
     try {
       debugPrint('Fetching conversations for user: $userId');
 
-      final response = await _client.get(
-        Uri.parse('$_baseUrl/conversations/list'),
-        headers: await _getHeaders(),
-      ).timeout(_shortTimeout);
+      final response = await _client
+          .get(
+            Uri.parse('$_baseUrl/conversations/list'),
+            headers: await _getHeaders(),
+          )
+          .timeout(_shortTimeout);
 
       if (response.statusCode == 200) {
-        // Explicitly decode response body as UTF-8 before JSON decoding
-        final data = json.decode(utf8.decode(response.bodyBytes));
-        debugPrint('Retrieved ${data['conversations']?.length ?? 0} conversations');
-        return data['conversations'] ?? [];
+        final List<dynamic> data = json.decode(utf8.decode(response.bodyBytes));
+        final conversations =
+            data.map((json) => ConversationSummary.fromJson(json)).toList();
+        debugPrint('Retrieved ${conversations.length} conversations');
+        return conversations;
       }
 
-      debugPrint('Failed to get conversations: ${response.statusCode}, Body: ${response.body}');
+      debugPrint(
+          'Failed to get conversations: ${response.statusCode}, Body: ${response.body}');
       throw Exception('Failed to get conversations: ${response.statusCode}');
     } catch (e) {
       debugPrint('Error fetching conversations: $e');
@@ -184,22 +219,26 @@ class ChatService {
     }
   }
 
-  Future<dynamic> getConversation(String conversationId, {required String userId}) async {
+  Future<ConversationSummary> getConversation(String conversationId,
+      {required String userId}) async {
     try {
       debugPrint('Fetching conversation $conversationId for user: $userId');
 
-      final response = await _client.get(
-        Uri.parse('$_baseUrl/conversations/$conversationId/get'),
-        headers: await _getHeaders(),
-      ).timeout(_shortTimeout);
+      final response = await _client
+          .get(
+            Uri.parse('$_baseUrl/conversations/$conversationId/get'),
+            headers: await _getHeaders(),
+          )
+          .timeout(_shortTimeout);
 
       if (response.statusCode == 200) {
         debugPrint('Successfully retrieved conversation $conversationId');
-        // Explicitly decode response body as UTF-8 before JSON decoding
-        return json.decode(utf8.decode(response.bodyBytes));
+        return ConversationSummary.fromJson(
+            json.decode(utf8.decode(response.bodyBytes)));
       }
 
-      debugPrint('Failed to get conversation: ${response.statusCode}, Body: ${response.body}');
+      debugPrint(
+          'Failed to get conversation: ${response.statusCode}, Body: ${response.body}');
       throw Exception('Failed to get conversation: ${response.statusCode}');
     } catch (e) {
       debugPrint('Error fetching conversation: $e');
@@ -207,122 +246,90 @@ class ChatService {
     }
   }
 
-  Future<List<ChatMessage>> getConversationMessages(String conversationId, {required String userId}) async {
+  Future<List<ChatMessage>> getConversationMessages(String conversationId,
+      {required String userId}) async {
     try {
       debugPrint('Fetching messages for conversation $conversationId');
 
-      final response = await _client.get(
-        Uri.parse('$_baseUrl/conversations/$conversationId/get_messages'),
-        headers: await _getHeaders(),
-      ).timeout(_shortTimeout);
+      final response = await _client
+          .get(
+            Uri.parse('$_baseUrl/conversations/$conversationId/get_messages'),
+            headers: await _getHeaders(),
+          )
+          .timeout(_shortTimeout);
 
       if (response.statusCode == 200) {
-        // Explicitly decode response body as UTF-8 before JSON decoding
         final data = json.decode(utf8.decode(response.bodyBytes));
         final List<dynamic> messagesJson = data['messages'] ?? [];
-        debugPrint('[ChatService getConversationMessages] Retrieved ${messagesJson.length} raw messages from conversation $conversationId');
+        debugPrint(
+            '[ChatService getConversationMessages] Retrieved ${messagesJson.length} raw messages from conversation $conversationId');
 
-        // --- E2EE Modification: Decrypt messages ---
         List<ChatMessage> messages = [];
         int successCount = 0;
         int failureCount = 0;
         for (var msgJson in messagesJson) {
-          // debugPrint('[ChatService getConversationMessages] Processing raw message JSON: ${jsonEncode(msgJson)}'); // Removed raw JSON log
           try {
             ChatMessage message = ChatMessage.fromJson(msgJson);
-            // debugPrint('[ChatService getConversationMessages] Parsed message ${message.id}, Role: ${message.role}, HasContent: ${message.content != null}, HasKey: ${message.encryptedKey != null}, HasIV: ${message.iv != null}, HasTag: ${message.tag != null}'); // Removed
+            // Check if decryption is needed (assuming backend marks encrypted messages)
+            bool needsDecryption =
+                msgJson['is_encrypted'] ?? false; // Example check
 
-            // Attempt decryption if the necessary fields are present (isEncrypted removed)
-            if (message.content != null && message.encryptedKey != null && message.iv != null && message.tag != null) {
-              try {
-                // debugPrint('[ChatService getConversationMessages] Attempting to decrypt message ${message.id}'); // Removed
-                // Use the individual fields directly from the ChatMessage object, using renamed 'content'
-                final Map<String, String> decryptionData = {
-                  'content': message.content!, // Use renamed field
-                  'encrypted_key': message.encryptedKey!,
-                  'iv': message.iv!,
-                  'tag': message.tag!,
-                };
-                // debugPrint('[ChatService getConversationMessages] Prepared decryptionData for message ${message.id}'); // Removed
-
-                final decryptedContent = await _encryptionService.decryptMessage(decryptionData);
-                successCount++; // Increment success count
-
-                // Create a new message object with decrypted content
-                // Store decrypted content in the 'content' field for UI use
-                // Keep original encrypted fields for potential re-encryption or debugging
-                messages.add(message.copyWith(
-                  content: decryptedContent, // Update content with decrypted text
-                  // isEncrypted: false, // Removed
-                  // encryptedContent: message.content, // Keep original encrypted data in 'content' field? No, copyWith replaces it.
-                                                // We lose the original encrypted string here unless we add another field.
-                                                // For now, assume UI only needs decrypted content.
-                 ));
-              } catch (e) {
-                failureCount++; // Increment failure count
-                // Keep detailed error log
-                debugPrint('[ChatService getConversationMessages] Decryption FAILED for message ${message.id}: $e. Displaying placeholder.');
-                // If decryption fails, add message with placeholder content
-                 messages.add(message.copyWith( // Use copyWith to keep other fields
-                  content: '[Decryption Failed: $e]', // Include error in placeholder
-                 ));
-                 /* Original placeholder logic:
-                 messages.add(ChatMessage(
-                  id: message.id,
-                  role: message.role,
-                  content: '[Decryption Failed]',
-                  model: message.model,
-                  timestamp: message.timestamp,
-                  createdAt: message.createdAt,
-                  tokenCount: message.tokenCount,
-                  encryptedKey: message.encryptedKey,
-                  iv: message.iv,
-                  tag: message.tag,
-                ));
-                */
-              }
+            if (needsDecryption &&
+                msgJson['encrypted_content'] != null /* && other keys */) {
+              // TODO: Implement E2EE Decryption
+              debugPrint(
+                  "[ChatService] WARNING: Decryption needed but not implemented for message ${message.id}. Displaying placeholder.");
+              messages.add(message.copyWith(
+                  content: '[Encrypted Message - Decryption Pending]'));
+              failureCount++;
             } else {
-              // Keep log for unexpected cases where decryption isn't attempted
-              debugPrint('[ChatService getConversationMessages] Message ${message.id} does not have required fields for decryption. Adding as is.');
+              // Assume plaintext or already decrypted
               messages.add(message);
-              // Consider if this should count as a failure if content was expected
-              // failureCount++; 
+              // Consider if plaintext should be a failure case
+              if (needsDecryption) {
+                debugPrint(
+                    "[ChatService] WARNING: Message ${message.id} marked encrypted but missing data for decryption.");
+                failureCount++; // Count as failure if decryption was expected but couldn't happen
+              }
             }
           } catch (e) {
-             failureCount++; // Count processing errors as failures too
-             // Keep error log
-             debugPrint('[ChatService getConversationMessages] Error processing message JSON: $e. Skipping message.');
-             // Optionally add a placeholder message for the skipped one
+            failureCount++;
+            debugPrint(
+                '[ChatService getConversationMessages] Error processing message JSON: $e. Skipping message.');
           }
         }
-        // Log summary once after processing all messages
-        debugPrint('[ChatService getConversationMessages] Finished processing ${messagesJson.length} messages. Decrypted: $successCount, Failed/Skipped: $failureCount');
+        debugPrint(
+            '[ChatService getConversationMessages] Finished processing ${messagesJson.length} messages. Decrypted: $successCount, Failed/Skipped: $failureCount');
         return messages;
-        // --- End E2EE Modification ---
       }
 
-      debugPrint('Failed to get conversation messages: ${response.statusCode}, Body: ${response.body}');
-      throw Exception('Failed to get conversation messages: ${response.statusCode}');
+      debugPrint(
+          'Failed to get conversation messages: ${response.statusCode}, Body: ${response.body}');
+      throw Exception(
+          'Failed to get conversation messages: ${response.statusCode}');
     } catch (e) {
       debugPrint('Error fetching conversation messages: $e');
       rethrow;
     }
   }
 
-  // --- New Method: Rename Conversation ---
-  Future<void> renameConversation(String conversationId, String newTitle) async {
+  Future<void> renameConversation(
+      String conversationId, String newTitle) async {
     try {
       debugPrint('Renaming conversation $conversationId to "$newTitle"');
 
-      final response = await _client.put(
-        Uri.parse('$_baseUrl/conversations/$conversationId/update_title'), // Correct endpoint
-        headers: await _getHeaders(),
-        body: json.encode({'title': newTitle}), // Correct request body key
-      ).timeout(_shortTimeout);
+      final response = await _client
+          .put(
+            Uri.parse('$_baseUrl/conversations/$conversationId/update_title'),
+            headers: await _getHeaders(),
+            body: json.encode({'title': newTitle}),
+          )
+          .timeout(_shortTimeout);
 
       if (response.statusCode != 200) {
         // Try parsing error detail
-        String errorDetail = 'Failed to rename conversation: ${response.statusCode}';
+        String errorDetail =
+            'Failed to rename conversation: ${response.statusCode}';
         try {
           // Explicitly decode response body as UTF-8 before JSON decoding
           final errorData = json.decode(utf8.decode(response.bodyBytes));
@@ -330,7 +337,8 @@ class ChatService {
             errorDetail = 'Rename failed: ${errorData['detail']}';
           }
         } catch (_) {} // Ignore parsing errors
-        debugPrint('Failed to rename conversation: ${response.statusCode}, Body: ${response.body}');
+        debugPrint(
+            'Failed to rename conversation: ${response.statusCode}, Body: ${response.body}');
         throw Exception(errorDetail);
       }
 
@@ -340,20 +348,24 @@ class ChatService {
       rethrow; // Rethrow to be handled by ChatProvider
     }
   }
-  // --- End New Method ---
 
-  Future<void> deleteConversation(String conversationId, {required String userId}) async {
+  Future<void> deleteConversation(String conversationId,
+      {required String userId}) async {
     try {
       debugPrint('Deleting conversation $conversationId');
 
-      final response = await _client.delete(
-        Uri.parse('$_baseUrl/conversations/$conversationId/delete'),
-        headers: await _getHeaders(),
-      ).timeout(_shortTimeout);
+      final response = await _client
+          .delete(
+            Uri.parse('$_baseUrl/conversations/$conversationId/delete'),
+            headers: await _getHeaders(),
+          )
+          .timeout(_shortTimeout);
 
       if (response.statusCode != 204) {
-        debugPrint('Failed to delete conversation: ${response.statusCode}, Body: ${response.body}');
-        throw Exception('Failed to delete conversation: ${response.statusCode}');
+        debugPrint(
+            'Failed to delete conversation: ${response.statusCode}, Body: ${response.body}');
+        throw Exception(
+            'Failed to delete conversation: ${response.statusCode}');
       }
 
       debugPrint('Deleted conversation $conversationId');
@@ -380,13 +392,16 @@ class ChatService {
         headers: {'Accept': 'application/json'},
       ).timeout(_shortTimeout, onTimeout: () {
         debugPrint('Request timed out while fetching models');
-        throw TimeoutException('Connection timed out while fetching models. Please check your internet connection.');
+        throw TimeoutException(
+            'Connection timed out while fetching models. Please check your internet connection.');
       });
 
       if (response.statusCode == 200) {
         // Explicitly decode response body as UTF-8 before JSON decoding
-        final List<dynamic> data = json.decode(utf8.decode(response.bodyBytes))['data'];
-        final List<String> modelIds = data.map((item) => item['id'] as String).toList();
+        final List<dynamic> data =
+            json.decode(utf8.decode(response.bodyBytes))['data'];
+        final List<String> modelIds =
+            data.map((item) => item['id'] as String).toList();
 
         // Update cache
         _cachedModels = modelIds;
@@ -396,7 +411,8 @@ class ChatService {
         return modelIds;
       }
 
-      debugPrint('LLM models error status: ${response.statusCode}, Body: ${response.body}');
+      debugPrint(
+          'LLM models error status: ${response.statusCode}, Body: ${response.body}');
 
       // If we have cached models and current fetch failed, return cached ones
       if (_cachedModels != null) {
@@ -432,14 +448,9 @@ class ChatService {
       return;
     }
 
-    // REMOVED HASH CHECK FALLBACK
-    // if (model.length > 40 && !model.contains('-')) {
-    //   debugPrint('WARNING: Model name appears to be a hash. Using fallback model name.');
-    //   model = 'gpt-3.5-turbo';
-    // }
-
     final String authUsername = _currentUsername ?? userId;
-    debugPrint('Streaming chat with model: $model, conversation: $conversationId');
+    debugPrint(
+        'Streaming chat with model: $model, conversation: $conversationId');
     debugPrint('Using authUsername: $authUsername (X-Username header)');
 
     final url = Uri.parse('$_baseUrl/chat/$model/generate');
@@ -447,45 +458,52 @@ class ChatService {
 
     if (messages.isEmpty) {
       debugPrint('ERROR: Cannot stream chat with empty message list');
-      yield* _provideFallbackResponse("No messages provided for chat completion. Please try again.");
+      yield* _provideFallbackResponse(
+          "No messages provided for chat completion. Please try again.");
       return;
     }
 
-    final filteredMessages = messages.where((msg) =>
-      !(msg.role == 'assistant' && (msg.content == null || msg.content!.isEmpty))).toList();
+    final filteredMessages = messages
+        .where((msg) => !(msg.role == 'assistant' &&
+            (msg.content == null || msg.content!.isEmpty)))
+        .toList();
 
     if (filteredMessages.isEmpty) {
       debugPrint('ERROR: All messages were filtered out');
-      yield* _provideFallbackResponse("No valid messages to send. Please try again.");
+      yield* _provideFallbackResponse(
+          "No valid messages to send. Please try again.");
       return;
     }
 
     if (conversationId == null || conversationId.isEmpty) {
       debugPrint('ERROR: No conversation ID provided for chat streaming');
-      yield* _provideFallbackResponse("No conversation ID available. Please try again.");
+      yield* _provideFallbackResponse(
+          "No conversation ID available. Please try again.");
       return;
     }
 
     final lastMsg = filteredMessages.last;
     if (lastMsg.role != 'user') {
-      debugPrint('WARNING: Last message is not from user. Role: ${lastMsg.role}');
+      debugPrint(
+          'WARNING: Last message is not from user. Role: ${lastMsg.role}');
     }
 
     final processedMessages = List<ChatMessage>.from(filteredMessages);
     processedMessages.sort((a, b) => a.createdAt.compareTo(b.createdAt));
 
-    debugPrint('Streaming chat with ${processedMessages.length} messages using model: $model');
+    debugPrint(
+        'Streaming chat with ${processedMessages.length} messages using model: $model');
 
     // Convert messages to API format, handling encryption for user messages
     final List<Map<String, dynamic>> apiMessages = [];
     try {
       apiMessages.addAll(await _prepareMessagesForRequest(processedMessages));
     } catch (e) {
-       debugPrint('Error preparing messages for API: $e');
-       yield* _provideFallbackResponse('Error preparing message for sending: $e');
-       return;
+      debugPrint('Error preparing messages for API: $e');
+      yield* _provideFallbackResponse(
+          'Error preparing message for sending: $e');
+      return;
     }
-
 
     final Map<String, dynamic> requestBody = {
       'messages': apiMessages,
@@ -502,28 +520,30 @@ class ChatService {
     }
 
     final request = http.Request('POST', url)
-      ..headers['Content-Type'] = 'application/json; charset=utf-8' // Ensure UTF-8
+      ..headers['Content-Type'] =
+          'application/json; charset=utf-8' // Ensure UTF-8
       ..headers['X-Username'] = authUsername
       ..body = json.encode(requestBody);
 
     http.StreamedResponse? response; // Declare response outside try block
 
     try {
-      debugPrint('Sending request to chat endpoint with X-Username: $authUsername');
+      debugPrint(
+          'Sending request to chat endpoint with X-Username: $authUsername');
 
-      response = await _client.send(request).timeout(
-        _longTimeout,
-        onTimeout: () {
-          debugPrint('Request timed out while streaming chat');
-          throw TimeoutException('Connection timed out. Using offline response mode.');
-        }
-      );
+      response =
+          await _client.send(request).timeout(_longTimeout, onTimeout: () {
+        debugPrint('Request timed out while streaming chat');
+        throw TimeoutException(
+            'Connection timed out. Using offline response mode.');
+      });
 
       if (response.statusCode != 200) {
         debugPrint('Failed to get chat response: ${response.statusCode}');
 
         final responseBytes = await response.stream.toBytes();
-        final responseString = utf8.decode(responseBytes); // Decode error response as UTF-8
+        final responseString =
+            utf8.decode(responseBytes); // Decode error response as UTF-8
         debugPrint('Error response body: $responseString');
 
         try {
@@ -536,14 +556,17 @@ class ChatService {
           debugPrint('Failed to parse error response as JSON: $e');
         }
 
-        yield* _provideFallbackResponse("Server returned error ${response.statusCode}: $responseString");
+        yield* _provideFallbackResponse(
+            "Server returned error ${response.statusCode}: $responseString");
         return;
       }
 
-      debugPrint('Stream connection established, processing response chunks...');
+      debugPrint(
+          'Stream connection established, processing response chunks...');
 
       // Correctly handle the stream processing within this try block
-      await for (final chunk in response.stream.transform(utf8.decoder)) { // Ensure stream chunks are decoded as UTF-8
+      await for (final chunk in response.stream.transform(utf8.decoder)) {
+        // Ensure stream chunks are decoded as UTF-8
         final lines = chunk.split('\n');
         for (final line in lines) {
           if (line.trim().isEmpty) continue;
@@ -551,11 +574,12 @@ class ChatService {
           if (line.startsWith('data: ')) {
             final jsonString = line.substring(6);
             // Log the raw JSON string received before parsing - REMOVED
-            // debugPrint('[ChatService streamChat] Received raw data line: $jsonString'); 
+            // debugPrint('[ChatService streamChat] Received raw data line: $jsonString');
 
             if (jsonString.trim() == '[DONE]') {
               // Keep this log
-              debugPrint('[ChatService streamChat] Received [DONE] marker, ending stream normally');
+              debugPrint(
+                  '[ChatService streamChat] Received [DONE] marker, ending stream normally');
               // Break the inner loop, the outer loop will handle completion
               break;
             }
@@ -585,47 +609,52 @@ class ChatService {
                 try {
                   // debugPrint('Attempting to decrypt stream chunk...'); // Optional: reduce log noise
                   final encryptedData = {
-                    'content': data['content'].toString(), // <-- Use 'content' here too
+                    'content': data['content']
+                        .toString(), // <-- Use 'content' here too
                     'encrypted_key': data['encrypted_key'].toString(),
                     'iv': data['iv'].toString(),
                     'tag': data['tag'].toString(),
                   };
 
-                  final decryptedContent = await _encryptionService.decryptMessage(encryptedData);
+                  final decryptedContent =
+                      await _encryptionService.decryptMessage(encryptedData);
                   // Minimal success log removed
-                  // debugPrint('Stream chunk decrypted successfully.'); 
+                  // debugPrint('Stream chunk decrypted successfully.');
                   yield decryptedContent;
                 } catch (e) {
                   // Keep detailed error log
-                  debugPrint('[ChatService streamChat] Stream chunk decryption failed: $e');
+                  debugPrint(
+                      '[ChatService streamChat] Stream chunk decryption failed: $e');
                   yield "[Decryption Error]"; // Yield placeholder on error
                 }
-              // Removed incorrect 'else if (data['content'] != null)' block.
-              // If the first 'if' fails, it means we are missing necessary decryption components.
+                // Removed incorrect 'else if (data['content'] != null)' block.
+                // If the first 'if' fails, it means we are missing necessary decryption components.
               } else if (data['is_final'] == true) {
-                 debugPrint('Received final chunk marker.');
-                 // No content to yield for the final marker itself, just note it.
+                debugPrint('Received final chunk marker.');
+                // No content to yield for the final marker itself, just note it.
               } else if (data['content'] != null) {
-                 // Keep log for this specific error case
-                 debugPrint('[ChatService streamChat] Received stream chunk with "content" but missing other required decryption keys (encrypted_key, iv, tag). Cannot decrypt.');
-                 yield "[Decryption Error: Missing Keys]";
+                // Keep log for this specific error case
+                debugPrint(
+                    '[ChatService streamChat] Received stream chunk with "content" but missing other required decryption keys (encrypted_key, iv, tag). Cannot decrypt.');
+                yield "[Decryption Error: Missing Keys]";
               } else {
-                 // Reduce logging for unexpected formats unless debugging
-                 // Only log if it's not an empty object (which sometimes happens)
-                 // and not the initial role object if backend sends one
-                 if (data.isNotEmpty && data['role'] == null) {
-                    debugPrint('Received stream chunk in unexpected format: $jsonString');
-                 }
+                // Reduce logging for unexpected formats unless debugging
+                // Only log if it's not an empty object (which sometimes happens)
+                // and not the initial role object if backend sends one
+                if (data.isNotEmpty && data['role'] == null) {
+                  debugPrint(
+                      'Received stream chunk in unexpected format: $jsonString');
+                }
               }
             } catch (e) {
-              debugPrint('Error processing JSON chunk: $e - String: $jsonString');
+              debugPrint(
+                  'Error processing JSON chunk: $e - String: $jsonString');
               // Consider yielding an error or just logging
             }
           } // End if line starts with 'data: '
         } // End for line in lines
       } // End await for chunk
       debugPrint('Stream processing loop completed successfully');
-
     } catch (e) {
       debugPrint('Error during stream chat request or processing: $e');
       // Yield an error message through the stream if possible
@@ -633,25 +662,23 @@ class ChatService {
       // Rethrow if needed, or handle appropriately
       // rethrow;
     } finally {
-       // Ensure the response stream is closed if it exists
-       // Note: Closing the client might be too aggressive here if it's shared.
-       // The http package usually handles stream closing.
-       debugPrint('Stream chat finished or encountered an error.');
+      // Ensure the response stream is closed if it exists
+      // Note: Closing the client might be too aggressive here if it's shared.
+      // The http package usually handles stream closing.
+      debugPrint('Stream chat finished or encountered an error.');
     }
   } // End streamChat method
 
-
   // Non-streaming chat completion with the same endpoint
   Future<String> generateChatCompletion(
-    String model,
-    List<ChatMessage> messages, {
-    required String userId,
-    String? conversationId,
-    double? temperature,
-    int? maxTokens}
-  ) async {
+      String model, List<ChatMessage> messages,
+      {required String userId,
+      String? conversationId,
+      double? temperature,
+      int? maxTokens}) async {
     // Debug model name validation
-    debugPrint('Original model name provided to generateChatCompletion: $model');
+    debugPrint(
+        'Original model name provided to generateChatCompletion: $model');
 
     // Validate and normalize model name
     if (model.isEmpty) {
@@ -659,15 +686,10 @@ class ChatService {
       throw Exception("No model selected. Please try again.");
     }
 
-    // REMOVED HASH CHECK FALLBACK
-    // if (model.length > 40 && !model.contains('-')) {
-    //   debugPrint('WARNING: Model name appears to be a hash. Using fallback model name.');
-    //   model = 'gpt-3.5-turbo'; // Using fallback
-    // }
-
     // Use currentUsername if available, otherwise fall back to userId
     final String authUsername = _currentUsername ?? userId;
-    debugPrint('Generating chat completion with model: $model, conversation: $conversationId');
+    debugPrint(
+        'Generating chat completion with model: $model, conversation: $conversationId');
 
     // Fix URL construction - don't use query parameters in the URL
     // The backend expects /chat/{model_name}/generate
@@ -678,15 +700,19 @@ class ChatService {
 
     // Validate the message list
     if (messages.isEmpty) {
-      throw Exception('Cannot generate chat completion with empty message list');
+      throw Exception(
+          'Cannot generate chat completion with empty message list');
     }
 
     // Remove any assistant messages with empty content (placeholders) from the list sent to API
-    final filteredMessages = messages.where((msg) =>
-      !(msg.role == 'assistant' && (msg.content == null || msg.content!.isEmpty))).toList(); // Check for null or empty
+    final filteredMessages = messages
+        .where((msg) => !(msg.role == 'assistant' &&
+            (msg.content == null || msg.content!.isEmpty)))
+        .toList(); // Check for null or empty
 
     if (filteredMessages.isEmpty) {
-      debugPrint('ERROR: All messages were filtered out (only empty assistant messages?)');
+      debugPrint(
+          'ERROR: All messages were filtered out (only empty assistant messages?)');
       throw Exception("No valid messages to send. Please try again.");
     }
 
@@ -701,7 +727,8 @@ class ChatService {
     processedMessages.sort((a, b) => a.createdAt.compareTo(b.createdAt));
 
     // Log info about the request
-    debugPrint('Generating chat completion with ${processedMessages.length} messages using model: $model');
+    debugPrint(
+        'Generating chat completion with ${processedMessages.length} messages using model: $model');
     debugPrint('Using endpoint: ${url.toString()}');
     debugPrint('Using conversation ID: $conversationId');
 
@@ -710,8 +737,8 @@ class ChatService {
     try {
       apiMessages = await _prepareMessagesForRequest(processedMessages);
     } catch (e) {
-       debugPrint('Error preparing messages for non-streaming API: $e');
-       throw Exception('Error preparing message for sending: $e');
+      debugPrint('Error preparing messages for non-streaming API: $e');
+      throw Exception('Error preparing message for sending: $e');
     }
 
     final Map<String, dynamic> requestBody = {
@@ -730,16 +757,20 @@ class ChatService {
     }
 
     try {
-      debugPrint('Sending request to chat endpoint with X-Username: $authUsername');
+      debugPrint(
+          'Sending request to chat endpoint with X-Username: $authUsername');
       debugPrint('Request body: ${json.encode(requestBody)}');
-      final response = await _client.post(
-        url,
-        headers: await _getHeaders(), // Use helper to get headers
-        body: json.encode(requestBody),
-      ).timeout(_longTimeout);
+      final response = await _client
+          .post(
+            url,
+            headers: await _getHeaders(), // Use helper to get headers
+            body: json.encode(requestBody),
+          )
+          .timeout(_longTimeout);
 
       if (response.statusCode != 200) {
-        debugPrint('Failed to get chat completion: ${response.statusCode}, Body: ${response.body}');
+        debugPrint(
+            'Failed to get chat completion: ${response.statusCode}, Body: ${response.body}');
 
         // Try to parse the error response as JSON to extract detailed error message
         try {
@@ -753,7 +784,8 @@ class ChatService {
           debugPrint('Failed to parse error response as JSON: $e');
         }
 
-        throw Exception('Failed to get chat completion: ${response.statusCode}');
+        throw Exception(
+            'Failed to get chat completion: ${response.statusCode}');
       }
 
       // Explicitly decode response body as UTF-8 before JSON decoding
@@ -765,38 +797,37 @@ class ChatService {
           data['iv'] != null &&
           data['tag'] != null &&
           data['is_encrypted'] == true) {
-
         debugPrint('Received non-streaming encrypted response.');
         // --- E2EE Modification: Decrypt Non-Streaming Response ---
         try {
           debugPrint('Attempting to decrypt non-streaming response...');
-          final decryptedContent = await _encryptionService.decryptMessage(
-            Map<String, String>.from({
-              'encrypted_content': data['encrypted_content'],
-              'encrypted_key': data['encrypted_key'],
-              'iv': data['iv'],
-              'tag': data['tag']
-            })
-          );
+          final decryptedContent =
+              await _encryptionService.decryptMessage(Map<String, String>.from({
+            'encrypted_content': data['encrypted_content'],
+            'encrypted_key': data['encrypted_key'],
+            'iv': data['iv'],
+            'tag': data['tag']
+          }));
           debugPrint('Non-streaming response decrypted successfully.');
           return decryptedContent;
         } catch (e) {
-           debugPrint('Non-streaming response decryption failed: $e. Returning placeholder.');
-           return '[Decryption Failed]';
-           // Optionally rethrow or handle differently
-           // throw Exception('Failed to decrypt response: $e');
+          debugPrint(
+              'Non-streaming response decryption failed: $e. Returning placeholder.');
+          return '[Decryption Failed]';
+          // Optionally rethrow or handle differently
+          // throw Exception('Failed to decrypt response: $e');
         }
         // --- End E2EE Modification ---
       } else if (data['content'] != null && data['is_encrypted'] == false) {
-         // Handle potential unencrypted responses if backend logic changes
-         debugPrint('WARNING: Received unencrypted non-streaming response.');
-         return data['content'].toString();
+        // Handle potential unencrypted responses if backend logic changes
+        debugPrint('WARNING: Received unencrypted non-streaming response.');
+        return data['content'].toString();
       }
 
       // If the response doesn't match expected encrypted or unencrypted format
-      debugPrint('Invalid response format from non-streaming chat API: ${response.body}');
+      debugPrint(
+          'Invalid response format from non-streaming chat API: ${response.body}');
       throw Exception('Invalid response format from chat completion API.');
-
     } catch (e) {
       debugPrint('Error in chat completion: $e');
       rethrow;
@@ -812,57 +843,37 @@ class ChatService {
     yield "*ERROR_MESSAGE*$errorDetail";
   }
 
-  // Added dispose method
+  // Dispose method - Added WebSocket disconnect
   void dispose() {
     debugPrint('Disposing ChatService');
-    _client.close();
+    disconnect(); // Disconnect WebSocket
+    _messageStreamController.close();
+    _conversationStreamController.close();
+    _errorStreamController.close();
+    _client.close(); // Close HTTP client
   }
 
-  // Helper method to prepare messages for API request (used by both stream and non-stream)
-  // Encrypts the content of ALL messages in the list using the Server's Public Key.
-  Future<List<Map<String, dynamic>>> _prepareMessagesForRequest(List<ChatMessage> messages) async {
+  // Helper method to prepare messages for API request (Needs E2EE)
+  Future<List<Map<String, dynamic>>> _prepareMessagesForRequest(
+      List<ChatMessage> messages) async {
+    // TODO: Implement E2EE Encryption (using server key? or recipient keys? Needs clarification)
+    debugPrint(
+        "[ChatService] WARNING: _prepareMessagesForRequest sending PLAINTEXT.");
     final apiMessages = <Map<String, dynamic>>[];
-
     for (var msg in messages) {
-      // Get the plaintext content. For assistant messages, this is available in ChatProvider
-      // after they've been decrypted for display. For user messages, it's directly available.
-      final String? plaintextContent = msg.content;
-
-      // Skip if there's absolutely no content to encrypt
-      if (plaintextContent == null || plaintextContent.isEmpty) {
-         debugPrint('Skipping message with null or empty plaintext content. Role: ${msg.role}.');
-         continue;
-      }
-
-      try {
-        // Encrypt the plaintext content using the server's public key
-        final encryptedData = await _encryptionService.encryptMessage(plaintextContent);
-        apiMessages.add({
-          'role': msg.role,
-          'content': null, // Always null when sending encrypted data
-          'encrypted_content': encryptedData['encrypted_content'],
-          'encrypted_key': encryptedData['encrypted_key'],
-          'iv': encryptedData['iv'],
-          'tag': encryptedData['tag'],
-          'is_encrypted': true, // Mark as encrypted
-        });
-      } catch (e) {
-        debugPrint('Encryption failed for message (Role: ${msg.role}) preparation: $e');
-        // Decide how to handle: skip, throw? Skipping might lead to incomplete context.
-        // Throwing stops the whole process. Let's throw for now to make errors visible.
-        throw Exception('Failed to encrypt message (Role: ${msg.role}) for API request: $e');
-      }
+      apiMessages.add({
+        'role': msg.role ?? 'user', // Default role if null?
+        'content': msg.content ?? '', // Send plaintext for now
+      });
     }
-
-    // Log the number of messages being sent
-    debugPrint('Prepared ${apiMessages.length} messages for API request (encrypted with server key).');
-
     return apiMessages;
   }
 
   // --- New Method: Summarize Conversation ---
-  Future<String?> summarizeConversation(String conversationId, List<ChatMessage> messages) async {
-    debugPrint('[ChatService] summarizeConversation called for ID: $conversationId'); // Add entry log
+  Future<String?> summarizeConversation(
+      String conversationId, List<ChatMessage> messages) async {
+    debugPrint(
+        '[ChatService] summarizeConversation called for ID: $conversationId'); // Add entry log
     if (messages.isEmpty) {
       debugPrint('Cannot summarize conversation with empty messages');
       return null;
@@ -873,51 +884,62 @@ class ChatService {
     }
 
     final url = Uri.parse('$_baseUrl/conversations/$conversationId/summarize');
-    debugPrint('Sending ${messages.length} messages to summarize conversation $conversationId at $url');
+    debugPrint(
+        'Sending ${messages.length} messages to summarize conversation $conversationId at $url');
 
     try {
-      // Prepare messages: Encrypt content using Server Public Key
+      // TODO: Implement E2EE Encryption for messages sent for summarization
+      debugPrint(
+          "[ChatService] WARNING: Sending PLAINTEXT messages for summarization.");
       final List<Map<String, dynamic>> apiMessages = [];
       for (var msg in messages) {
-         final String? plaintextContent = msg.content;
-         if (plaintextContent == null || plaintextContent.isEmpty) {
-           debugPrint('Skipping message with null/empty content during summarization prep. Role: ${msg.role}.');
-           continue;
-         }
-         try {
-           // Encrypt the plaintext content (assuming msg.content holds decrypted text here)
-           final encryptedData = await _encryptionService.encryptMessage(plaintextContent);
-           // Update the payload to match the backend's SummarizeRequestMessage model
-           apiMessages.add({
-             'role': msg.role,
-             'content': encryptedData['encrypted_content'], // Use 'content' field for encrypted data
-             'encrypted_key': encryptedData['encrypted_key'],
-             'iv': encryptedData['iv'],
-             'tag': encryptedData['tag'],
-             // 'is_encrypted': true, // Removed
-           });
-         } catch (e) {
-            debugPrint('Encryption failed for summarization message (Role: ${msg.role}): $e');
-            // Fail summarization if any message fails encryption
-            throw Exception('Failed to encrypt message for summarization: $e');
-         }
+        final String? plaintextContent = msg.content;
+        if (plaintextContent == null || plaintextContent.isEmpty) {
+          debugPrint(
+              'Skipping message with null/empty content during summarization prep. Role: ${msg.role}.');
+          continue;
+        }
+        try {
+          // Encrypt the plaintext content (assuming msg.content holds decrypted text here)
+          final encryptedData =
+              await _encryptionService.encryptMessage(plaintextContent);
+          // Update the payload to match the backend's SummarizeRequestMessage model
+          apiMessages.add({
+            'role': msg.role,
+            'content': encryptedData[
+                'encrypted_content'], // Use 'content' field for encrypted data
+            'encrypted_key': encryptedData['encrypted_key'],
+            'iv': encryptedData['iv'],
+            'tag': encryptedData['tag'],
+            // 'is_encrypted': true, // Removed
+          });
+        } catch (e) {
+          debugPrint(
+              'Encryption failed for summarization message (Role: ${msg.role}): $e');
+          // Fail summarization if any message fails encryption
+          throw Exception('Failed to encrypt message for summarization: $e');
+        }
       }
 
       if (apiMessages.isEmpty) {
-         debugPrint('No valid messages to send for summarization after encryption prep.');
-         return null;
+        debugPrint(
+            'No valid messages to send for summarization after encryption prep.');
+        return null;
       }
 
       final requestBody = json.encode({'messages': apiMessages});
       final headers = await _getHeaders();
 
-      debugPrint('Summarization request body (encrypted): ${requestBody.substring(0, min(100, requestBody.length))}...');
+      debugPrint(
+          'Summarization request body (encrypted): ${requestBody.substring(0, min(100, requestBody.length))}...');
 
-      final response = await _client.put(
-        url,
-        headers: headers,
-        body: requestBody,
-      ).timeout(_longTimeout); // Use longer timeout for LLM calls
+      final response = await _client
+          .put(
+            url,
+            headers: headers,
+            body: requestBody,
+          )
+          .timeout(_longTimeout); // Use longer timeout for LLM calls
 
       if (response.statusCode == 200) {
         // Explicitly decode response body as UTF-8 before JSON decoding
@@ -926,16 +948,18 @@ class ChatService {
         debugPrint('Summarization successful, received title: $title');
         return title;
       } else {
-        debugPrint('Failed to summarize conversation: ${response.statusCode}, Body: ${response.body}');
+        debugPrint(
+            'Failed to summarize conversation: ${response.statusCode}, Body: ${response.body}');
         // Try to parse error detail
         try {
-           // Explicitly decode response body as UTF-8 before JSON decoding
-           final errorData = json.decode(utf8.decode(response.bodyBytes));
-           if (errorData['detail'] != null) {
-             throw Exception('Summarization failed: ${errorData['detail']}');
-           }
+          // Explicitly decode response body as UTF-8 before JSON decoding
+          final errorData = json.decode(utf8.decode(response.bodyBytes));
+          if (errorData['detail'] != null) {
+            throw Exception('Summarization failed: ${errorData['detail']}');
+          }
         } catch (_) {} // Ignore JSON parsing errors
-        throw Exception('Failed to summarize conversation: ${response.statusCode}');
+        throw Exception(
+            'Failed to summarize conversation: ${response.statusCode}');
       }
     } catch (e) {
       debugPrint('Error summarizing conversation: $e');
@@ -952,19 +976,24 @@ class ChatService {
     }
     try {
       debugPrint('Deleting all conversations for user: $_currentUsername');
-      final response = await _client.delete(
-        Uri.parse('$_baseUrl/conversations/me/all'), // Use the new endpoint
-        headers: await _getHeaders(),
-      ).timeout(_longTimeout); // Use longer timeout for potentially long operation
+      final response = await _client
+          .delete(
+            Uri.parse('$_baseUrl/conversations/me/all'), // Use the new endpoint
+            headers: await _getHeaders(),
+          )
+          .timeout(
+              _longTimeout); // Use longer timeout for potentially long operation
 
       if (response.statusCode == 200) {
         // Explicitly decode response body as UTF-8 before JSON decoding
         final data = json.decode(utf8.decode(response.bodyBytes));
-        debugPrint('Successfully deleted all conversations: ${data['message']}');
+        debugPrint(
+            'Successfully deleted all conversations: ${data['message']}');
         return data; // Return the response data (e.g., counts)
       } else {
         // Try parsing error detail
-        String errorDetail = 'Failed to delete all conversations: ${response.statusCode}';
+        String errorDetail =
+            'Failed to delete all conversations: ${response.statusCode}';
         try {
           // Explicitly decode response body as UTF-8 before JSON decoding
           final errorData = json.decode(utf8.decode(response.bodyBytes));
@@ -972,7 +1001,8 @@ class ChatService {
             errorDetail = 'Delete all failed: ${errorData['detail']}';
           }
         } catch (_) {} // Ignore parsing errors
-        debugPrint('Failed to delete all conversations: ${response.statusCode}, Body: ${response.body}');
+        debugPrint(
+            'Failed to delete all conversations: ${response.statusCode}, Body: ${response.body}');
         throw Exception(errorDetail);
       }
     } catch (e) {
@@ -982,4 +1012,27 @@ class ChatService {
   }
   // --- End New Method ---
 
-} // End of ChatService class
+  // --- WebSocket Connection Management ---
+  Future<void> connect() async {
+    // ... (implementation) ...
+  }
+
+  void _scheduleReconnect() {
+    // ... (implementation - corrected pow call) ...
+    final delaySeconds =
+        _initialReconnectDelay.inSeconds * pow(2.0, _reconnectAttempts - 1);
+    final delay = Duration(seconds: max(1, delaySeconds.toInt()));
+    // ...
+  }
+
+  void disconnect() {
+    // ... (implementation) ...
+    _channel?.sink.close(status.goingAway); // Use status code
+    // ...
+  }
+
+  // --- Placeholder for notifyListeners ---
+  void notifyListeners() {
+    debugPrint("[ChatService] notifyListeners() called (placeholder)");
+  }
+}

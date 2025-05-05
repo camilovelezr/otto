@@ -6,22 +6,26 @@ plugins {
 }
 
 android {
-    namespace = "com.example.aithena_chat"
+    namespace = "com.example.otto"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
     }
 
     kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_1_8
+        jvmTarget = "11"
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.aithena_chat"
+        applicationId = "com.example.otto"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
@@ -35,18 +39,18 @@ android {
         development {
             dimension "environment"
             applicationIdSuffix ".dev"
-            resValue "string", "app_name", "Aithena Chat Dev"
-            buildConfigField "String", "BASE_URL", "\"http://localhost:4000\""
+            resValue "string", "app_name", "Otto Dev"
+            buildConfigField "String", "BASE_URL", "\"http://192.168.0.141:8088\""
         }
         staging {
             dimension "environment"
             applicationIdSuffix ".staging"
-            resValue "string", "app_name", "Aithena Chat Staging"
+            resValue "string", "app_name", "Otto Staging"
             buildConfigField "String", "BASE_URL", "\"https://staging-api.example.com\""
         }
         production {
             dimension "environment"
-            resValue "string", "app_name", "Aithena Chat"
+            resValue "string", "app_name", "Otto"
             buildConfigField "String", "BASE_URL", "\"https://production-api.example.com\""
         }
     }

@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.example" "\0"
-            VALUE "FileDescription", "aithena_chat" "\0"
+            VALUE "FileDescription", "Otto" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "aithena_chat" "\0"
+            VALUE "InternalName", "Otto" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2025 com.example. All rights reserved." "\0"
-            VALUE "OriginalFilename", "aithena_chat.exe" "\0"
-            VALUE "ProductName", "aithena_chat" "\0"
+            VALUE "OriginalFilename", "Otto.exe" "\0"
+            VALUE "ProductName", "Otto" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

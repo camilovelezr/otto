@@ -2,18 +2,27 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'app_spacing.dart'; // Import for spacing constants
 import 'app_colors.dart'; // Import base colors
+import 'package:flutter/scheduler.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 class ThemeProvider extends ChangeNotifier {
   static const String _themeKey = 'is_dark_mode';
   late SharedPreferences _prefs;
-  bool _isDarkMode;
+  ThemeMode _themeMode = ThemeMode.system;
 
-  ThemeProvider() : _isDarkMode = true {
-    _loadTheme();
+  ThemeProvider() {
+    _loadThemeMode();
   }
 
-  bool get isDarkMode => _isDarkMode;
-  ThemeMode get themeMode => _isDarkMode ? ThemeMode.dark : ThemeMode.light;
+  ThemeMode get themeMode => _themeMode;
+
+  bool get isDarkMode {
+    if (_themeMode == ThemeMode.system) {
+      final brightness = SchedulerBinding.instance.window.platformBrightness;
+      return brightness == Brightness.dark;
+    }
+    return _themeMode == ThemeMode.dark;
+  }
 
   // Note: AppSpacing constants should be accessed directly:
   // import '../theme/app_spacing.dart';
@@ -28,7 +37,7 @@ class ThemeProvider extends ChangeNotifier {
     Color(0xFF9582FF),
     Color(0xFF9C8FFF),
   ];
-  
+
   static const _secondaryGradient = [
     Color(0xFFFF6B6B),
     Color(0xFFFF7373),
@@ -37,7 +46,7 @@ class ThemeProvider extends ChangeNotifier {
     Color(0xFFFF8989),
     Color(0xFFFF8E8E),
   ];
-  
+
   static const _accentGradient = [
     Color(0xFF48DAD0),
     Color(0xFF52DDD4),
@@ -47,129 +56,96 @@ class ThemeProvider extends ChangeNotifier {
     Color(0xFF76E8E0),
   ];
 
-  Future<void> _loadTheme() async {
-    _prefs = await SharedPreferences.getInstance();
-    _isDarkMode = _prefs.getBool(_themeKey) ?? true;
+  Future<void> _loadThemeMode() {
+    // TODO: Load theme mode preference from storage
+    // For now, defaults to system
+    final brightness = SchedulerBinding.instance.window.platformBrightness;
+    _themeMode =
+        brightness == Brightness.dark ? ThemeMode.dark : ThemeMode.light;
+    notifyListeners();
+    return Future.value();
+  }
+
+  void toggleTheme(bool isOn) {
+    _themeMode = isOn ? ThemeMode.dark : ThemeMode.light;
+    // TODO: Persist theme mode preference (e.g., using shared_preferences)
     notifyListeners();
   }
 
-  Future<void> toggleTheme() async {
-    _isDarkMode = !_isDarkMode;
-    await _prefs.setBool(_themeKey, _isDarkMode);
-    notifyListeners();
-  }
-
-  ThemeData get currentTheme => _isDarkMode ? darkTheme : lightTheme;
+  ThemeData get currentTheme => isDarkMode ? darkTheme : lightTheme;
 
   // Add getters for the themes
-  ThemeData get lightTheme => _lightThemeData; // Expose light theme
-  ThemeData get darkTheme => _darkThemeData; // Expose dark theme
-
-  // --- Light Theme Definition ---
-  // Make the theme definitions static private vars or instance vars if preferred
-  static final ThemeData _lightThemeData = (() {
-    final baseColorScheme = ColorScheme.light(
-      brightness: Brightness.light,
-      primary: AppColors.primary, // Use base color
-      secondary: AppColors.secondary,
-      tertiary: AppColors.accent,
-      background: const Color(0xFFF4F5F7),
-      surface: Colors.white,
-      error: AppColors.error,
-      onPrimary: Colors.white,
-      onSecondary: Colors.white,
-      onBackground: const Color(0xFF1A1A2E),
-      onSurface: const Color(0xFF1A1A2E),
-      onError: Colors.white,
-      surfaceTint: Colors.transparent,
-      primaryContainer: AppColors.primary.withOpacity(0.1),
-      onPrimaryContainer: AppColors.primary,
-      secondaryContainer: AppColors.secondary.withOpacity(0.1),
-      onSecondaryContainer: AppColors.secondary,
-      tertiaryContainer: AppColors.accent.withOpacity(0.1),
-      onTertiaryContainer: AppColors.accent,
-      errorContainer: AppColors.error.withOpacity(0.1),
-      onErrorContainer: AppColors.error,
-      surfaceVariant: const Color(0xFFEEEEF2),
-      onSurfaceVariant: const Color(0xFF333642),
-      outline: const Color(0xFFD0D2DA),
-      outlineVariant: const Color(0xFFE4E6EC),
-    );
-
-    return ThemeData(
-      useMaterial3: true,
-      brightness: Brightness.light,
-      colorScheme: baseColorScheme,
-      scaffoldBackgroundColor: baseColorScheme.background,
-      textTheme: _buildTextTheme(isDark: false),
-      appBarTheme: _buildAppBarTheme(isDark: false, colorScheme: baseColorScheme),
-      elevatedButtonTheme: _buildElevatedButtonTheme(isDark: false, colorScheme: baseColorScheme),
-      inputDecorationTheme: _buildInputDecorationTheme(isDark: false, colorScheme: baseColorScheme),
-      cardTheme: _buildCardTheme(isDark: false, colorScheme: baseColorScheme),
-      dividerTheme: DividerThemeData(
-        color: baseColorScheme.outline.withOpacity(0.5),
-        thickness: 1,
+  ThemeData get lightTheme {
+    final baseTheme = ThemeData.light(useMaterial3: true);
+    return baseTheme.copyWith(
+      colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+      appBarTheme: baseTheme.appBarTheme.copyWith(
+        backgroundColor: Colors.deepPurple.shade300,
+        foregroundColor: Colors.white,
+        elevation: 4.0,
+        toolbarHeight: 65.0, // Increased height for mobile friendliness
+        titleTextStyle: GoogleFonts.roboto(
+          fontSize: 20,
+          fontWeight: FontWeight.w600,
+          color: Colors.white,
+        ),
       ),
-      iconTheme: IconThemeData(
-        color: baseColorScheme.onSurface.withOpacity(0.8),
-        size: 24,
+      textTheme: GoogleFonts.robotoTextTheme(baseTheme.textTheme),
+      // Add other customizations: button themes, card themes, etc.
+      cardTheme: baseTheme.cardTheme.copyWith(
+        elevation: 2,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        clipBehavior: Clip.antiAlias,
       ),
-      scrollbarTheme: _buildScrollbarTheme(isDark: false, colorScheme: baseColorScheme),
-      snackBarTheme: _buildSnackBarTheme(isDark: false, colorScheme: baseColorScheme),
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.deepPurple, // Button background
+          foregroundColor: Colors.white, // Button text/icon color
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+      ),
     );
-  })();
+  }
 
-  static ThemeData _darkThemeData = (() {
-    final baseColorScheme = ColorScheme.dark(
-      brightness: Brightness.dark,
-      primary: AppColors.primary,
-      secondary: AppColors.secondary,
-      tertiary: AppColors.accent,
-      background: const Color(0xFF0F0F17),
-      surface: const Color(0xFF1E1E2E),
-      error: AppColors.error,
-      onPrimary: Colors.white,
-      onSecondary: Colors.white,
-      onBackground: Colors.white,
-      onSurface: Colors.white,
-      onError: Colors.black,
-      surfaceTint: Colors.transparent,
-      primaryContainer: AppColors.primary.withOpacity(0.25),
-      onPrimaryContainer: Colors.white,
-      secondaryContainer: AppColors.secondary.withOpacity(0.2),
-      onSecondaryContainer: Colors.white,
-      tertiaryContainer: AppColors.accent.withOpacity(0.2),
-      onTertiaryContainer: Colors.white,
-      errorContainer: AppColors.error.withOpacity(0.3),
-      onErrorContainer: Colors.white,
-      surfaceVariant: const Color(0xFF2A2A3F),
-      onSurfaceVariant: const Color(0xDDFFFFFF),
-      outline: const Color(0xFF41435A),
-      outlineVariant: const Color(0xFF2A2A3F),
-    );
-
-    return ThemeData(
-      useMaterial3: true,
-      brightness: Brightness.dark,
-      colorScheme: baseColorScheme,
-      scaffoldBackgroundColor: baseColorScheme.background,
-      textTheme: _buildTextTheme(isDark: true),
-      appBarTheme: _buildAppBarTheme(isDark: true, colorScheme: baseColorScheme),
-      elevatedButtonTheme: _buildElevatedButtonTheme(isDark: true, colorScheme: baseColorScheme),
-      inputDecorationTheme: _buildInputDecorationTheme(isDark: true, colorScheme: baseColorScheme),
-      cardTheme: _buildCardTheme(isDark: true, colorScheme: baseColorScheme),
-      dividerTheme: DividerThemeData(
-        color: baseColorScheme.outline.withOpacity(0.5),
-        thickness: 1,
+  ThemeData get darkTheme {
+    final baseTheme = ThemeData.dark(useMaterial3: true);
+    return baseTheme.copyWith(
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: Colors.deepPurple,
+        brightness: Brightness.dark, // Important for dark theme colors
       ),
-      iconTheme: IconThemeData(
-        color: baseColorScheme.onSurface.withOpacity(0.9),
-        size: 24,
+      appBarTheme: baseTheme.appBarTheme.copyWith(
+        backgroundColor: Colors.deepPurple.shade700,
+        foregroundColor: Colors.white,
+        elevation: 4.0,
+        toolbarHeight: 65.0, // Increased height for mobile friendliness
+        titleTextStyle: GoogleFonts.roboto(
+          fontSize: 20,
+          fontWeight: FontWeight.w600,
+          color: Colors.white,
+        ),
       ),
-      scrollbarTheme: _buildScrollbarTheme(isDark: true, colorScheme: baseColorScheme),
-      snackBarTheme: _buildSnackBarTheme(isDark: true, colorScheme: baseColorScheme),
+      textTheme: GoogleFonts.robotoTextTheme(baseTheme.textTheme).apply(
+          bodyColor: Colors.white70,
+          displayColor: Colors.white), // Adjust text colors
+      cardTheme: baseTheme.cardTheme.copyWith(
+        elevation: 2,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        clipBehavior: Clip.antiAlias,
+        color: Colors.grey.shade800, // Darker card background
+      ),
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.deepPurple.shade400, // Button background
+          foregroundColor: Colors.white, // Button text/icon color
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+      ),
+      // Add other customizations
     );
-  })();
+  }
 
   static TextTheme _buildTextTheme({required bool isDark}) {
     final baseColor = isDark ? Colors.white : const Color(0xFF1A1A2E);
@@ -214,7 +190,8 @@ class ThemeProvider extends ChangeNotifier {
     );
   }
 
-  static AppBarTheme _buildAppBarTheme({required bool isDark, required ColorScheme colorScheme}) {
+  static AppBarTheme _buildAppBarTheme(
+      {required bool isDark, required ColorScheme colorScheme}) {
     return AppBarTheme(
       centerTitle: false,
       elevation: 0,
@@ -228,11 +205,13 @@ class ThemeProvider extends ChangeNotifier {
         letterSpacing: 0.1,
       ),
       iconTheme: IconThemeData(color: colorScheme.onSurface.withOpacity(0.8)),
-      actionsIconTheme: IconThemeData(color: colorScheme.onSurface.withOpacity(0.8)),
+      actionsIconTheme:
+          IconThemeData(color: colorScheme.onSurface.withOpacity(0.8)),
     );
   }
 
-  static ElevatedButtonThemeData _buildElevatedButtonTheme({required bool isDark, required ColorScheme colorScheme}) {
+  static ElevatedButtonThemeData _buildElevatedButtonTheme(
+      {required bool isDark, required ColorScheme colorScheme}) {
     return ElevatedButtonThemeData(
       style: ElevatedButton.styleFrom(
         backgroundColor: colorScheme.primary,
@@ -250,7 +229,8 @@ class ThemeProvider extends ChangeNotifier {
     );
   }
 
-  static InputDecorationTheme _buildInputDecorationTheme({required bool isDark, required ColorScheme colorScheme}) {
+  static InputDecorationTheme _buildInputDecorationTheme(
+      {required bool isDark, required ColorScheme colorScheme}) {
     return InputDecorationTheme(
       filled: true,
       fillColor: colorScheme.surfaceVariant.withOpacity(isDark ? 0.5 : 0.7),
@@ -284,26 +264,32 @@ class ThemeProvider extends ChangeNotifier {
     );
   }
 
-  static CardTheme _buildCardTheme({required bool isDark, required ColorScheme colorScheme}) {
+  static CardTheme _buildCardTheme(
+      {required bool isDark, required ColorScheme colorScheme}) {
     return CardTheme(
       elevation: isDark ? 1 : 2,
       shadowColor: Colors.black.withOpacity(0.1),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppSpacing.borderRadiusLarge),
-        side: isDark ? BorderSide(color: colorScheme.outline.withOpacity(0.5), width: 0.5) : BorderSide.none,
+        side: isDark
+            ? BorderSide(
+                color: colorScheme.outline.withOpacity(0.5), width: 0.5)
+            : BorderSide.none,
       ),
       color: colorScheme.surface,
       clipBehavior: Clip.antiAlias,
     );
   }
 
-  static ScrollbarThemeData _buildScrollbarTheme({required bool isDark, required ColorScheme colorScheme}) {
+  static ScrollbarThemeData _buildScrollbarTheme(
+      {required bool isDark, required ColorScheme colorScheme}) {
     return ScrollbarThemeData(
       thumbVisibility: MaterialStateProperty.all(false),
       thickness: MaterialStateProperty.all(6.0),
       radius: const Radius.circular(3.0),
       thumbColor: MaterialStateProperty.resolveWith((states) {
-        if (states.contains(MaterialState.hovered) || states.contains(MaterialState.dragged)) {
+        if (states.contains(MaterialState.hovered) ||
+            states.contains(MaterialState.dragged)) {
           return colorScheme.onSurface.withOpacity(0.6);
         }
         return colorScheme.onSurface.withOpacity(0.3);
@@ -313,7 +299,8 @@ class ThemeProvider extends ChangeNotifier {
     );
   }
 
-  static SnackBarThemeData _buildSnackBarTheme({required bool isDark, required ColorScheme colorScheme}) {
+  static SnackBarThemeData _buildSnackBarTheme(
+      {required bool isDark, required ColorScheme colorScheme}) {
     return SnackBarThemeData(
       backgroundColor: isDark ? colorScheme.surface : colorScheme.onSurface,
       contentTextStyle: TextStyle(
@@ -323,7 +310,8 @@ class ThemeProvider extends ChangeNotifier {
       ),
       actionTextColor: isDark ? colorScheme.primary : colorScheme.primary,
       elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppSpacing.borderRadiusSmall)),
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppSpacing.borderRadiusSmall)),
       behavior: SnackBarBehavior.floating,
     );
   }
@@ -349,4 +337,4 @@ class ThemeProvider extends ChangeNotifier {
         colors: _accentGradient,
         stops: const [0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
       );
-} 
+}

@@ -2,7 +2,7 @@
 
 # Comprehensive icon generation script for both macOS and Android
 
-echo "===== Aithena Icon Generator ====="
+echo "===== Otto Icon Generator ====="
 echo "Generating icons for both macOS and Android platforms"
 echo "===================================="
 
